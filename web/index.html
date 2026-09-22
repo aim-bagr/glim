@@ -19,6 +19,9 @@
       }
     }
   </script>
+  <!-- Three.js & OrbitControls -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
   <link rel="stylesheet" href="style.css">
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans antialiased">
@@ -196,8 +199,74 @@
         </div>
       </section>
 
-      <!-- Terminal Log Console Card (Fills remaining height) -->
-      <section class="bg-slate-900/80 border border-slate-800 rounded-xl p-5 shadow-sm flex-1 flex flex-col space-y-3 min-h-[380px]">
+      <!-- Tab Switcher -->
+      <div class="flex items-center gap-2 border-b border-slate-800 pb-1">
+        <button id="tab-btn-3d" class="px-4 py-2 text-xs font-semibold rounded-lg bg-blue-600/20 text-blue-400 border border-blue-500/30 flex items-center gap-2 transition">
+          <i data-lucide="box" class="w-3.5 h-3.5"></i>
+          3D Map Visualizer & Submaps
+        </button>
+        <button id="tab-btn-console" class="px-4 py-2 text-xs font-medium rounded-lg text-slate-400 hover:text-slate-200 border border-transparent hover:bg-slate-800/50 flex items-center gap-2 transition">
+          <i data-lucide="terminal" class="w-3.5 h-3.5"></i>
+          Execution Console
+        </button>
+      </div>
+
+      <!-- 3D Map Visualizer Card -->
+      <section id="tab-content-3d" class="bg-slate-900/80 border border-slate-800 rounded-xl p-4 shadow-sm flex flex-col space-y-3">
+        <!-- 3D Controls Bar -->
+        <div class="flex flex-wrap items-center justify-between gap-3 text-xs border-b border-slate-800/80 pb-3">
+          <div class="flex items-center gap-2">
+            <span class="font-medium text-slate-300">Run:</span>
+            <select id="viewer-run-select" class="bg-slate-950 border border-slate-800 rounded px-2.5 py-1 text-slate-200">
+              <option value="">Select a run...</option>
+            </select>
+            <button id="viewer-load-btn" class="px-2.5 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded font-medium transition">Load Map</button>
+          </div>
+
+          <!-- Submap Isolation Controls -->
+          <div class="flex items-center gap-2">
+            <label class="flex items-center gap-1.5 cursor-pointer font-medium text-slate-300">
+              <input type="checkbox" id="viewer-isolate-toggle" class="rounded border-slate-700 bg-slate-900 text-blue-600 focus:ring-0">
+              Isolate Submap
+            </label>
+            <button id="viewer-prev-btn" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 rounded text-slate-200" title="Previous submap">&lt; Prev</button>
+            <input type="range" id="viewer-submap-slider" min="0" max="0" value="0" class="w-24 accent-blue-600 cursor-pointer">
+            <button id="viewer-next-btn" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 rounded text-slate-200" title="Next submap">Next &gt;</button>
+            <button id="viewer-focus-btn" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-blue-400 rounded" title="Focus camera on submap">
+              <i data-lucide="crosshair" class="w-3.5 h-3.5 inline"></i> Focus
+            </button>
+          </div>
+
+          <!-- Color Mode & Point Size -->
+          <div class="flex items-center gap-2">
+            <select id="viewer-color-mode" class="bg-slate-950 border border-slate-800 rounded px-2 py-1 text-slate-200">
+              <option value="rainbow">Rainbow (Z)</option>
+              <option value="flat">Flat White</option>
+            </select>
+            <span class="text-slate-400">Size:</span>
+            <input type="range" id="viewer-point-size" min="1" max="10" value="2" class="w-16 accent-blue-600 cursor-pointer">
+          </div>
+        </div>
+
+        <!-- 3D Viewport Canvas Container -->
+        <div id="viewport-3d" class="relative w-full h-[480px] bg-slate-950 rounded-lg overflow-hidden border border-slate-800 flex items-center justify-center">
+          <div id="viewport-placeholder" class="text-xs text-slate-500 text-center select-none">
+            <i data-lucide="box" class="w-8 h-8 mx-auto mb-2 text-slate-700"></i>
+            Select a past run above to load 3D submaps and trajectory
+          </div>
+          <!-- Floating Info HUD -->
+          <div id="viewer-hud" class="hidden absolute bottom-3 left-3 bg-slate-900/90 border border-slate-800/90 rounded-lg px-3 py-1.5 text-[11px] text-slate-300 font-mono shadow-md backdrop-blur">
+            <span id="hud-submap-text">Submap: None</span>
+          </div>
+          <!-- Orbit Controls Hint -->
+          <div class="absolute top-2 right-2 text-[10px] text-slate-500 font-mono bg-slate-950/60 px-2 py-1 rounded select-none pointer-events-none">
+            Rotate: Left Drag | Pan: Right Drag | Zoom: Scroll
+          </div>
+        </div>
+      </section>
+
+      <!-- Terminal Log Console Card -->
+      <section id="tab-content-console" class="hidden bg-slate-900/80 border border-slate-800 rounded-xl p-5 shadow-sm flex-1 flex flex-col space-y-3 min-h-[380px]">
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-2">
             <i data-lucide="terminal" class="w-4 h-4 text-amber-400"></i>
