@@ -125,15 +125,13 @@ class ProcessManager:
                 try:
                     with open(sm_path, "r") as f:
                         lines = f.readlines()
-                    # Filter out C++ style comments for JSON parse or edit textually
                     new_lines = []
                     for line in lines:
                         if '"max_num_keyframes"' in line:
-                            new_lines.append(f'    "max_num_keyframes": {req.max_num_keyframes},\n')
+                            line = re.sub(r'("max_num_keyframes"\s*:\s*)[^,\n\r]+', rf'\g<1>{req.max_num_keyframes}', line)
                         elif '"submap_target_num_points"' in line:
-                            new_lines.append(f'    "submap_target_num_points": {req.submap_target_num_points},\n')
-                        else:
-                            new_lines.append(line)
+                            line = re.sub(r'("submap_target_num_points"\s*:\s*)[^,\n\r]+', rf'\g<1>{req.submap_target_num_points}', line)
+                        new_lines.append(line)
                     with open(sm_path, "w") as f:
                         f.writelines(new_lines)
                 except Exception as e:
@@ -148,9 +146,8 @@ class ProcessManager:
                 new_lines = []
                 for line in lines:
                     if '"min_travel_dist"' in line:
-                        new_lines.append(f'    "min_travel_dist": {req.min_travel_dist},\n')
-                    else:
-                        new_lines.append(line)
+                        line = re.sub(r'("min_travel_dist"\s*:\s*)[^,\n\r]+', rf'\g<1>{req.min_travel_dist}', line)
+                    new_lines.append(line)
                 with open(pg_path, "w") as f:
                     f.writelines(new_lines)
             except Exception as e:
