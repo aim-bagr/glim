@@ -34,15 +34,15 @@
     "between_registration_type": "GICP",
     // Registration error factors
     "registration_error_factor_type": "VGICP_GPU",
-    "randomsampling_rate": 1.0,
+    "randomsampling_rate": 0.5,
     "submap_voxel_resolution": 0.5,
     "submap_voxel_resolution_max": 1.0,
     "submap_voxel_resolution_dmin": 5.0,
     "submap_voxel_resolution_dmax": 20.0,
     "submap_voxelmap_levels": 2,
     "submap_voxelmap_scaling_factor": 2.0,
-    "max_implicit_loop_distance": 100.0,
-    "min_implicit_loop_overlap": 0.2,
+    "max_implicit_loop_distance": 50.0,
+    "min_implicit_loop_overlap": 0.35,
     // Optimizer settings
     "use_isam2_dogleg": false,
     "isam2_relinearize_skip": 1,

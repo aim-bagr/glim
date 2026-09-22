@@ -1,0 +1,3 @@
+[submodule "thirdparty/aimcap"]
+	path = thirdparty/aimcap
+	url = git@github.com:aim-bagr/aimcap.git
