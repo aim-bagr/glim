@@ -1,0 +1,42 @@
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #020617;
+}
+::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}
+
+/* Console log styling */
+.log-line {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.log-info {
+  color: #94a3b8;
+}
+.log-warn {
+  color: #fbbf24;
+}
+.log-err {
+  color: #f87171;
+}
+.log-progress {
+  color: #38bdf8;
+}
+
+/* Status indicator pulse animation */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(1.15); }
+}
+.status-running {
+  animation: pulse-dot 1.5s infinite ease-in-out;
+}
