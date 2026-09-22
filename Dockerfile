@@ -37,7 +37,11 @@ RUN apt-get install -y --no-install-recommends \
     libgtsam-points-cuda12.2-dev \
     libiridescence-dev \
     zenity \
+    python3-pip \
     && rm -rf /var/lib/apt/lists/*
+
+# 2b. Install web service microservice dependencies
+RUN pip3 install --no-cache-dir fastapi "uvicorn[standard]" websockets pydantic
 
 # 3. Copy source tree
 WORKDIR /opt/glim
@@ -55,6 +59,8 @@ RUN cmake .. \
     && ln -s /opt/glim/build/glim_mcap /usr/local/bin/glim_mcap \
     && ln -s /opt/glim/build/glim_offline_viewer /usr/local/bin/glim_offline_viewer \
     && chmod -R a+rX /opt/glim
+
+EXPOSE 8080
 
 WORKDIR /opt/glim
 CMD ["glim_mcap", "--help"]
