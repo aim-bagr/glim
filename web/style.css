@@ -40,3 +40,20 @@
 .status-running {
   animation: pulse-dot 1.5s infinite ease-in-out;
 }
+
+/* Monospace console terminal sizing: ~80 chars default, ~120 chars wide */
+#console-drawer.console-standard {
+  width: 640px;
+  max-width: calc(100vw - 2rem);
+}
+
+#console-drawer.console-wide {
+  width: 960px;
+  max-width: calc(100vw - 2rem);
+}
+
+#log-console {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 11px;
+  line-height: 1.5;
+}

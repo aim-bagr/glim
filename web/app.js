@@ -39,7 +39,9 @@ const toggleRunsBtn = document.getElementById('toggle-runs-btn');
 const closeRunsBtn = document.getElementById('close-runs-btn');
 const toggleConsoleBtn = document.getElementById('toggle-console-btn');
 const closeConsoleBtn = document.getElementById('close-console-btn');
+const expandConsoleBtn = document.getElementById('expand-console-btn');
 const switchToLiveBtn = document.getElementById('switch-to-live-btn');
+let isConsoleWide = false;
 
 // Launcher Form
 const launcherForm = document.getElementById('launcher-form');
@@ -330,6 +332,20 @@ function setupModalToggles() {
     minConsoleBtn.classList.toggle('hidden', !consoleDrawer.classList.contains('hidden'));
     updateModalButtonStates();
   });
+
+  if (expandConsoleBtn) {
+    expandConsoleBtn.addEventListener('click', () => {
+      isConsoleWide = !isConsoleWide;
+      consoleDrawer.classList.toggle('console-wide', isConsoleWide);
+      consoleDrawer.classList.toggle('console-standard', !isConsoleWide);
+      expandConsoleBtn.innerHTML = isConsoleWide
+        ? '<i data-lucide="minimize-2" class="w-3.5 h-3.5"></i>'
+        : '<i data-lucide="maximize-2" class="w-3.5 h-3.5"></i>';
+      expandConsoleBtn.title = isConsoleWide ? 'Switch to standard (80 cols) width' : 'Switch to wide (120 cols) width';
+      if (window.lucide) lucide.createIcons();
+      showToast(isConsoleWide ? 'Console: Wide (120 cols)' : 'Console: Standard (80 cols)', 'info');
+    });
+  }
 
   closeConsoleBtn.addEventListener('click', () => {
     consoleDrawer.classList.add('hidden');
