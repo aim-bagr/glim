@@ -1,7 +1,10 @@
 // GLIM Headless SLAM Dashboard & Real-Time Three.js Visualizer
 let ws = null;
 let currentJobState = 'idle';
+let activeLiveRunName = null;
 let currentRunName = null;
+let viewerMode = 'idle'; // 'idle' | 'live' | 'loaded'
+let loadSessionId = 0;
 let autoScroll = true;
 let totalLogLines = 0;
 let liveStreamTimer = null;
@@ -36,6 +39,7 @@ const toggleRunsBtn = document.getElementById('toggle-runs-btn');
 const closeRunsBtn = document.getElementById('close-runs-btn');
 const toggleConsoleBtn = document.getElementById('toggle-console-btn');
 const closeConsoleBtn = document.getElementById('close-console-btn');
+const switchToLiveBtn = document.getElementById('switch-to-live-btn');
 
 // Launcher Form
 const launcherForm = document.getElementById('launcher-form');
@@ -62,8 +66,10 @@ const metricQueueGlob = document.getElementById('metric-queue-glob');
 // 3D Controls Elements
 const viewportContainer = document.getElementById('viewport-3d');
 const viewportPlaceholder = document.getElementById('viewport-placeholder');
+const viewerModeBadge = document.getElementById('viewer-mode-badge');
 const viewerRunSelect = document.getElementById('viewer-run-select');
 const viewerLoadBtn = document.getElementById('viewer-load-btn');
+const viewerClearBtn = document.getElementById('viewer-clear-btn');
 const viewerIsolateToggle = document.getElementById('viewer-isolate-toggle');
 const viewerPrevBtn = document.getElementById('viewer-prev-btn');
 const viewerNextBtn = document.getElementById('viewer-next-btn');
@@ -129,6 +135,7 @@ document.addEventListener('DOMContentLoaded', () => {
   connectWebSocket();
   setupModalToggles();
   setup3DViewerControls();
+  updateViewerControlsState();
 
   // Launcher & Actions
   launcherForm.addEventListener('submit', handleStartJob);
@@ -153,6 +160,110 @@ document.addEventListener('DOMContentLoaded', () => {
     autoScroll = e.target.checked;
   });
 });
+
+// Update Mode Badge & Visual Status
+function setViewerMode(mode, runName = null) {
+  viewerMode = mode;
+  currentRunName = runName;
+
+  if (mode === 'live') {
+    viewerModeBadge.textContent = '🔴 LIVE SLAM';
+    viewerModeBadge.className = 'px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-rose-500/20 text-rose-400 border border-rose-500/40 select-none';
+    viewportPlaceholder.classList.add('hidden');
+    switchToLiveBtn.classList.add('hidden');
+  } else if (mode === 'loaded') {
+    viewerModeBadge.textContent = '📁 LOADED RUN';
+    viewerModeBadge.className = 'px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-blue-500/20 text-blue-400 border border-blue-500/40 select-none';
+    viewportPlaceholder.classList.add('hidden');
+    if (currentJobState === 'running' || currentJobState === 'finalizing') {
+      switchToLiveBtn.classList.remove('hidden');
+    } else {
+      switchToLiveBtn.classList.add('hidden');
+    }
+  } else { // idle
+    viewerModeBadge.textContent = 'IDLE';
+    viewerModeBadge.className = 'px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-slate-800 text-slate-400 border border-slate-700 select-none';
+    viewportPlaceholder.classList.remove('hidden');
+    if (currentJobState === 'running' || currentJobState === 'finalizing') {
+      switchToLiveBtn.classList.remove('hidden');
+    } else {
+      switchToLiveBtn.classList.add('hidden');
+    }
+  }
+
+  updateViewerControlsState();
+}
+
+// Grey out and disable controls when not relevant
+function updateViewerControlsState() {
+  const hasSubmaps = currentRunSubmaps && currentRunSubmaps.length > 0;
+  const count = hasSubmaps ? currentRunSubmaps.length : 0;
+  const isLoaded = Boolean(currentRunName);
+
+  // 1. Isolate Toggle
+  viewerIsolateToggle.disabled = !hasSubmaps;
+  const isolateLabel = viewerIsolateToggle.closest('label');
+  if (isolateLabel) {
+    isolateLabel.classList.toggle('opacity-40', !hasSubmaps);
+    isolateLabel.classList.toggle('cursor-not-allowed', !hasSubmaps);
+    isolateLabel.classList.toggle('pointer-events-none', !hasSubmaps);
+  }
+
+  // 2. Previous (<) button: enabled only if activeSubmapId > 0
+  const canPrev = hasSubmaps && activeSubmapId !== null && activeSubmapId > 0;
+  viewerPrevBtn.disabled = !canPrev;
+  viewerPrevBtn.classList.toggle('opacity-40', !canPrev);
+  viewerPrevBtn.classList.toggle('cursor-not-allowed', !canPrev);
+
+  // 3. Next (>) button: enabled only if activeSubmapId < count - 1
+  const canNext = hasSubmaps && activeSubmapId !== null && activeSubmapId < count - 1;
+  viewerNextBtn.disabled = !canNext;
+  viewerNextBtn.classList.toggle('opacity-40', !canNext);
+  viewerNextBtn.classList.toggle('cursor-not-allowed', !canNext);
+
+  // 4. Slider: enabled only if multiple submaps
+  const canSlide = hasSubmaps && count > 1;
+  viewerSubmapSlider.disabled = !canSlide;
+  viewerSubmapSlider.classList.toggle('opacity-40', !canSlide);
+  viewerSubmapSlider.classList.toggle('cursor-not-allowed', !canSlide);
+  if (hasSubmaps) {
+    viewerSubmapSlider.max = Math.max(0, count - 1);
+    viewerSubmapSlider.value = activeSubmapId !== null ? activeSubmapId : 0;
+  } else {
+    viewerSubmapSlider.max = 0;
+    viewerSubmapSlider.value = 0;
+  }
+
+  // 5. Focus Button
+  const canFocus = hasSubmaps && activeSubmapId !== null;
+  viewerFocusBtn.disabled = !canFocus;
+  viewerFocusBtn.classList.toggle('opacity-40', !canFocus);
+  viewerFocusBtn.classList.toggle('cursor-not-allowed', !canFocus);
+
+  // 6. Fit & Top-Down Camera buttons
+  const canFit = isLoaded && (hasSubmaps || threeTrajectoryLine !== null);
+  viewerFitBtn.disabled = !canFit;
+  viewerFitBtn.classList.toggle('opacity-40', !canFit);
+  viewerFitBtn.classList.toggle('cursor-not-allowed', !canFit);
+
+  viewerTopdownBtn.disabled = !canFit;
+  viewerTopdownBtn.classList.toggle('opacity-40', !canFit);
+  viewerTopdownBtn.classList.toggle('cursor-not-allowed', !canFit);
+
+  // 7. Color Mode & Point Size
+  viewerColorMode.disabled = !hasSubmaps;
+  viewerColorMode.classList.toggle('opacity-40', !hasSubmaps);
+  viewerColorMode.classList.toggle('cursor-not-allowed', !hasSubmaps);
+
+  viewerPointSize.disabled = !hasSubmaps;
+  viewerPointSize.classList.toggle('opacity-40', !hasSubmaps);
+  viewerPointSize.classList.toggle('cursor-not-allowed', !hasSubmaps);
+
+  // 8. Clear Button
+  viewerClearBtn.disabled = (viewerMode === 'idle');
+  viewerClearBtn.classList.toggle('opacity-40', viewerMode === 'idle');
+  viewerClearBtn.classList.toggle('cursor-not-allowed', viewerMode === 'idle');
+}
 
 // Update Active Button Visual Styles
 function updateModalButtonStates() {
@@ -295,6 +406,10 @@ function updateJobStatus(job) {
   currentJobState = job.state;
   statusText.textContent = job.state.toUpperCase();
 
+  if (job.run_name) {
+    activeLiveRunName = job.run_name;
+  }
+
   statusDot.className = 'h-2 w-2 rounded-full';
 
   switch (job.state) {
@@ -304,8 +419,12 @@ function updateJobStatus(job) {
       headerStopBtn.classList.remove('hidden');
       startBtn.disabled = true;
 
-      if (job.run_name && job.run_name !== currentRunName) {
+      // If we are not currently viewing a loaded past run, track the live run automatically!
+      if (viewerMode !== 'loaded' && job.run_name && (viewerMode !== 'live' || currentRunName !== job.run_name)) {
         startLiveTracking(job.run_name);
+      } else if (viewerMode === 'loaded') {
+        // Show the switch-to-live pill so the user can easily hop back to live tracking
+        switchToLiveBtn.classList.remove('hidden');
       }
       break;
 
@@ -322,7 +441,10 @@ function updateJobStatus(job) {
       startBtn.disabled = false;
       startBtn.innerHTML = '<i data-lucide="play" class="w-3.5 h-3.5 fill-current"></i> Start SLAM Run';
       if (window.lucide) lucide.createIcons();
-      stopLiveTracking(true);
+      switchToLiveBtn.classList.add('hidden');
+      if (viewerMode === 'live') {
+        stopLiveTracking(true);
+      }
       fetchRuns();
       showToast('SLAM run completed successfully!', 'success');
       break;
@@ -335,7 +457,10 @@ function updateJobStatus(job) {
       startBtn.disabled = false;
       startBtn.innerHTML = '<i data-lucide="play" class="w-3.5 h-3.5 fill-current"></i> Start SLAM Run';
       if (window.lucide) lucide.createIcons();
-      stopLiveTracking(false);
+      switchToLiveBtn.classList.add('hidden');
+      if (viewerMode === 'live') {
+        stopLiveTracking(false);
+      }
       fetchRuns();
       showToast(`SLAM job ended: ${job.state}`, 'warn');
       break;
@@ -347,6 +472,7 @@ function updateJobStatus(job) {
       startBtn.disabled = false;
       startBtn.innerHTML = '<i data-lucide="play" class="w-3.5 h-3.5 fill-current"></i> Start SLAM Run';
       if (window.lucide) lucide.createIcons();
+      switchToLiveBtn.classList.add('hidden');
       break;
   }
 
@@ -462,10 +588,6 @@ async function fetchRuns() {
 
     if (prevSelectVal && Array.from(viewerRunSelect.options).some(o => o.value === prevSelectVal)) {
       viewerRunSelect.value = prevSelectVal;
-    } else if (runs.length > 0 && !currentRunName) {
-      viewerRunSelect.value = runs[0].name;
-      // Auto-load latest run on initial open so screen isn't empty!
-      loadMapRun(runs[0].name);
     }
   } catch (err) {
     runsList.innerHTML = '<div class="text-xs text-rose-500 py-4 text-center">Failed to load run history</div>';
@@ -520,6 +642,8 @@ async function handleStartJob(e) {
     minConsoleBtn.classList.add('hidden');
     updateModalButtonStates();
 
+    // Clear interface completely before starting live tracking of new run
+    clear3DScene();
     updateJobStatus(job);
     startLiveTracking(job.run_name);
     showToast(`SLAM Job launched: ${job.run_name}`, 'success');
@@ -663,6 +787,9 @@ function setup3DViewerControls() {
     const runName = e.target.value;
     if (runName) {
       loadMapRun(runName);
+    } else {
+      clear3DScene();
+      setViewerMode('idle');
     }
   });
 
@@ -672,6 +799,22 @@ function setup3DViewerControls() {
       loadMapRun(runName);
     } else {
       showToast('Select a run from the dropdown first', 'warn');
+    }
+  });
+
+  viewerClearBtn.addEventListener('click', () => {
+    stopLiveTracking(false);
+    clear3DScene();
+    setViewerMode('idle');
+    viewerRunSelect.value = '';
+    showToast('Viewer cleared', 'info');
+  });
+
+  switchToLiveBtn.addEventListener('click', () => {
+    if (activeLiveRunName) {
+      clear3DScene();
+      startLiveTracking(activeLiveRunName);
+      showToast(`Viewing active live SLAM run: ${activeLiveRunName}`, 'info');
     }
   });
 
@@ -687,10 +830,7 @@ function setup3DViewerControls() {
   });
 
   viewerPrevBtn.addEventListener('click', () => {
-    if (currentRunSubmaps.length === 0) {
-      showToast('No submaps loaded', 'warn');
-      return;
-    }
+    if (currentRunSubmaps.length === 0) return;
     if (activeSubmapId === null) activeSubmapId = 0;
     if (activeSubmapId > 0) {
       activeSubmapId--;
@@ -700,10 +840,7 @@ function setup3DViewerControls() {
   });
 
   viewerNextBtn.addEventListener('click', () => {
-    if (currentRunSubmaps.length === 0) {
-      showToast('No submaps loaded', 'warn');
-      return;
-    }
+    if (currentRunSubmaps.length === 0) return;
     if (activeSubmapId === null) activeSubmapId = -1;
     if (activeSubmapId < currentRunSubmaps.length - 1) {
       activeSubmapId++;
@@ -716,8 +853,6 @@ function setup3DViewerControls() {
     if (activeSubmapId !== null) {
       focusCameraOnSubmap(activeSubmapId);
       showToast(`Focused on Submap #${String(activeSubmapId).padStart(4, '0')}`, 'info');
-    } else {
-      showToast('No active submap to focus', 'warn');
     }
   });
 
@@ -753,19 +888,21 @@ function setup3DViewerControls() {
       updateModalButtonStates();
     } else if (e.key === 'ArrowLeft') {
       e.preventDefault();
-      viewerPrevBtn.click();
+      if (!viewerPrevBtn.disabled) viewerPrevBtn.click();
     } else if (e.key === 'ArrowRight') {
       e.preventDefault();
-      viewerNextBtn.click();
+      if (!viewerNextBtn.disabled) viewerNextBtn.click();
     } else if (e.key === 'f' || e.key === 'F') {
-      viewerFocusBtn.click();
+      if (!viewerFocusBtn.disabled) viewerFocusBtn.click();
     } else if (e.key === 'r' || e.key === 'R') {
-      viewerFitBtn.click();
+      if (!viewerFitBtn.disabled) viewerFitBtn.click();
     } else if (e.key === 't' || e.key === 'T') {
-      viewerTopdownBtn.click();
+      if (!viewerTopdownBtn.disabled) viewerTopdownBtn.click();
     } else if (e.key === 'i' || e.key === 'I') {
-      viewerIsolateToggle.checked = !viewerIsolateToggle.checked;
-      viewerIsolateToggle.dispatchEvent(new Event('change'));
+      if (!viewerIsolateToggle.disabled) {
+        viewerIsolateToggle.checked = !viewerIsolateToggle.checked;
+        viewerIsolateToggle.dispatchEvent(new Event('change'));
+      }
     }
   });
 }
@@ -788,10 +925,7 @@ function fitAllInView() {
     }
   });
 
-  if (box.isEmpty()) {
-    showToast('No 3D points loaded to frame', 'info');
-    return;
-  }
+  if (box.isEmpty()) return;
 
   const center = box.getCenter(new THREE.Vector3());
   const size = box.getSize(new THREE.Vector3());
@@ -837,8 +971,14 @@ function setTopDownView() {
   showToast("Top-down bird's-eye view", 'info');
 }
 
-// Clear Scene Between Runs
+// Clear Scene Completely Between Runs
 function clear3DScene() {
+  loadSessionId++; // Invalidate any running background submap streams or polls
+  if (liveStreamTimer) {
+    clearInterval(liveStreamTimer);
+    liveStreamTimer = null;
+  }
+
   submapCache.forEach((points) => {
     threeScene.remove(points);
     if (points.geometry) points.geometry.dispose();
@@ -862,15 +1002,19 @@ function clear3DScene() {
   viewerSubmapSlider.max = 0;
   viewerSubmapSlider.value = 0;
   viewerHud.classList.add('hidden');
+  updateViewerControlsState();
 }
 
 // Load a Completed or Past Run
 async function loadMapRun(runName) {
   if (!runName) return;
-  currentRunName = runName;
-  viewportPlaceholder.classList.add('hidden');
-  clear3DScene();
 
+  // Stop any active live tracking before loading past run!
+  stopLiveTracking(false);
+  clear3DScene();
+  setViewerMode('loaded', runName);
+
+  const thisSessionId = loadSessionId;
   viewerLoadBtn.disabled = true;
   viewerLoadBtn.innerHTML = '<i data-lucide="rotate-cw" class="w-3 h-3 animate-spin"></i><span>Loading...</span>';
   if (window.lucide) lucide.createIcons();
@@ -880,27 +1024,30 @@ async function loadMapRun(runName) {
   try {
     // 1. Fetch Trajectory Binary
     await loadTrajectory(runName, true);
+    if (thisSessionId !== loadSessionId) return;
 
     // 2. Fetch Submaps Metadata
     const res = await fetch(`/api/runs/${encodeURIComponent(runName)}/submaps`);
     if (!res.ok) throw new Error('Failed to load submap list');
-    currentRunSubmaps = await res.json();
+    const submaps = await res.json();
+    if (thisSessionId !== loadSessionId) return;
+
+    currentRunSubmaps = submaps;
 
     if (currentRunSubmaps.length === 0) {
       hudSubmapText.textContent = 'No submaps recorded';
       viewerHud.classList.remove('hidden');
+      updateViewerControlsState();
       showToast(`Run ${runName} has no submaps recorded`, 'warn');
       return;
     }
 
-    viewerSubmapSlider.max = currentRunSubmaps.length - 1;
-    activeSubmapId = 0;
-    viewerSubmapSlider.value = 0;
     viewerHud.classList.remove('hidden');
 
     // 3. Load First Batch of Submaps (first 35 for instantaneous initial view)
     const initialBatch = currentRunSubmaps.slice(0, 35);
     await Promise.all(initialBatch.map(sm => loadSubmapPoints(runName, sm.id)));
+    if (thisSessionId !== loadSessionId) return;
 
     onActiveSubmapChanged(0);
     fitAllInView();
@@ -909,7 +1056,7 @@ async function loadMapRun(runName) {
 
     // Stream remaining submaps in background smoothly
     if (currentRunSubmaps.length > 35) {
-      streamRemainingSubmaps(runName, 35);
+      streamRemainingSubmaps(thisSessionId, runName, 35);
     }
   } catch (err) {
     console.error('Failed to load map run:', err);
@@ -918,14 +1065,15 @@ async function loadMapRun(runName) {
     viewerLoadBtn.disabled = false;
     viewerLoadBtn.innerHTML = '<i data-lucide="rotate-cw" class="w-3 h-3"></i><span>Load</span>';
     if (window.lucide) lucide.createIcons();
+    updateViewerControlsState();
   }
 }
 
 // Background Submap Streaming
-async function streamRemainingSubmaps(runName, startIndex) {
+async function streamRemainingSubmaps(sessionId, runName, startIndex) {
   const chunkSize = 15;
   for (let i = startIndex; i < currentRunSubmaps.length; i += chunkSize) {
-    if (currentRunName !== runName) break;
+    if (sessionId !== loadSessionId) return; // Abort if scene was cleared or switched!
     const chunk = currentRunSubmaps.slice(i, i + chunkSize);
     await Promise.all(chunk.map(sm => loadSubmapPoints(runName, sm.id)));
     await new Promise(r => setTimeout(r, 40));
@@ -1049,6 +1197,8 @@ function turboColormap(t) {
 
 // Active Submap Selection Changed
 function onActiveSubmapChanged(submapId) {
+  activeSubmapId = submapId;
+  if (viewerSubmapSlider) viewerSubmapSlider.value = submapId;
   const sm = currentRunSubmaps.find(s => s.id === submapId);
   if (sm) {
     hudSubmapText.textContent = `Submap #${String(submapId).padStart(4, '0')} (${sm.num_points.toLocaleString()} pts)`;
@@ -1057,6 +1207,7 @@ function onActiveSubmapChanged(submapId) {
   }
   updateSubmapVisibility();
   loadSubmapPoints(currentRunName, submapId);
+  updateViewerControlsState();
 }
 
 // Update Submap Visibility for Isolation Mode & Visual Pop
@@ -1094,51 +1245,53 @@ function focusCameraOnSubmap(submapId) {
 }
 
 // ============================================================================
-// STRETCH GOAL: LIVE STREAMING SUBMAPS & TRAJECTORY DURING REPLAY
+// STRETCH GOAL: LIVE STREAMING SUBMAPS & TRAJECTORY DURING SLAM
 // ============================================================================
 
 function startLiveTracking(runName) {
   stopLiveTracking(false);
-  currentRunName = runName;
-  viewportPlaceholder.classList.add('hidden');
-  viewerHud.classList.remove('hidden');
+  clear3DScene();
+  setViewerMode('live', runName);
 
+  viewerHud.classList.remove('hidden');
   let knownSubmapCount = 0;
+  const thisSessionId = loadSessionId;
 
   async function pollLiveRun() {
-    if (currentJobState !== 'running' && currentJobState !== 'finalizing') {
-      stopLiveTracking(true);
+    if (thisSessionId !== loadSessionId || (currentJobState !== 'running' && currentJobState !== 'finalizing')) {
+      stopLiveTracking(false);
       return;
     }
 
     try {
       // 1. Poll Trajectory live
       await loadTrajectory(runName, false);
+      if (thisSessionId !== loadSessionId) return;
 
       // 2. Poll Submaps list live
       const res = await fetch(`/api/runs/${encodeURIComponent(runName)}/submaps`);
-      if (res.ok) {
+      if (res.ok && thisSessionId === loadSessionId) {
         const submaps = await res.json();
         currentRunSubmaps = submaps;
 
         if (submaps.length > knownSubmapCount) {
-          viewerSubmapSlider.max = Math.max(0, submaps.length - 1);
-
           // Ingest new submaps
           for (let i = knownSubmapCount; i < submaps.length; i++) {
+            if (thisSessionId !== loadSessionId) return;
             await loadSubmapPoints(runName, submaps[i].id);
           }
 
-          // Follow the latest submap if camera is at origin
+          // Follow latest submap if user hasn't manually scrubbed
           const latestId = submaps[submaps.length - 1].id;
           if (activeSubmapId === null || knownSubmapCount === 0) {
             activeSubmapId = latestId;
-            viewerSubmapSlider.value = latestId;
             focusCameraOnSubmap(latestId);
           }
-          hudSubmapText.textContent = `Live Submap #${latestId} (${submaps.length} total)`;
+          hudSubmapText.textContent = `Live Submap #${String(latestId).padStart(4, '0')} (${submaps.length} total)`;
           knownSubmapCount = submaps.length;
+          updateSubmapVisibility();
         }
+        updateViewerControlsState();
       }
     } catch (e) {
       console.warn('Live tracking poll error:', e);
@@ -1154,9 +1307,11 @@ function stopLiveTracking(loadFinalOptimized = true) {
     clearInterval(liveStreamTimer);
     liveStreamTimer = null;
   }
-  if (loadFinalOptimized && currentRunName) {
+  if (loadFinalOptimized && currentRunName && viewerMode === 'live') {
     setTimeout(() => {
-      loadMapRun(currentRunName);
+      if (viewerMode === 'live') {
+        loadMapRun(currentRunName);
+      }
     }, 1000);
   }
 }
