@@ -11,6 +11,7 @@ let threeScene, threeCamera, threeRenderer, threeControls;
 let currentRunSubmaps = [];
 let submapCache = new Map(); // submap_id -> THREE.Points
 let threeTrajectoryLine = null;
+let activeSubmapMarker = null;
 let activeSubmapId = null;
 let isIsolated = false;
 let colorMode = 'rainbow';
@@ -68,10 +69,55 @@ const viewerPrevBtn = document.getElementById('viewer-prev-btn');
 const viewerNextBtn = document.getElementById('viewer-next-btn');
 const viewerSubmapSlider = document.getElementById('viewer-submap-slider');
 const viewerFocusBtn = document.getElementById('viewer-focus-btn');
+const viewerFitBtn = document.getElementById('viewer-fit-btn');
+const viewerTopdownBtn = document.getElementById('viewer-topdown-btn');
 const viewerColorMode = document.getElementById('viewer-color-mode');
 const viewerPointSize = document.getElementById('viewer-point-size');
 const viewerHud = document.getElementById('viewer-hud');
 const hudSubmapText = document.getElementById('hud-submap-text');
+
+// Toast System
+let toastTimer = null;
+function showToast(msg, type = 'info', duration = 2500) {
+  const toast = document.getElementById('toast');
+  const toastMsg = document.getElementById('toast-msg');
+  const toastIcon = document.getElementById('toast-icon');
+  if (!toast || !toastMsg) return;
+
+  toastMsg.textContent = msg;
+
+  if (toastIcon) {
+    if (type === 'success') {
+      toastIcon.setAttribute('data-lucide', 'check-circle');
+      toastIcon.className = 'w-4 h-4 text-emerald-400 shrink-0';
+    } else if (type === 'error') {
+      toastIcon.setAttribute('data-lucide', 'alert-circle');
+      toastIcon.className = 'w-4 h-4 text-rose-400 shrink-0';
+    } else if (type === 'warn') {
+      toastIcon.setAttribute('data-lucide', 'alert-triangle');
+      toastIcon.className = 'w-4 h-4 text-amber-400 shrink-0';
+    } else {
+      toastIcon.setAttribute('data-lucide', 'info');
+      toastIcon.className = 'w-4 h-4 text-blue-400 shrink-0';
+    }
+    if (window.lucide) lucide.createIcons();
+  }
+
+  toast.classList.remove('hidden');
+  requestAnimationFrame(() => {
+    toast.classList.remove('opacity-0');
+    toast.classList.add('opacity-100');
+  });
+
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    toast.classList.remove('opacity-100');
+    toast.classList.add('opacity-0');
+    setTimeout(() => {
+      toast.classList.add('hidden');
+    }, 300);
+  }, duration);
+}
 
 // Initialize Application
 document.addEventListener('DOMContentLoaded', () => {
@@ -87,13 +133,20 @@ document.addEventListener('DOMContentLoaded', () => {
   // Launcher & Actions
   launcherForm.addEventListener('submit', handleStartJob);
   headerStopBtn.addEventListener('click', handleStopJob);
-  document.getElementById('refresh-datasets-btn').addEventListener('click', fetchDatasets);
-  document.getElementById('refresh-runs-btn').addEventListener('click', fetchRuns);
+  document.getElementById('refresh-datasets-btn').addEventListener('click', () => {
+    fetchDatasets();
+    showToast('Refreshing datasets...', 'info');
+  });
+  document.getElementById('refresh-runs-btn').addEventListener('click', () => {
+    fetchRuns();
+    showToast('Refreshing past runs...', 'info');
+  });
 
   clearLogsBtn.addEventListener('click', () => {
     logConsole.innerHTML = '';
     totalLogLines = 0;
     updateLogCount();
+    showToast('Console cleared', 'info');
   });
 
   autoScrollToggle.addEventListener('change', (e) => {
@@ -101,20 +154,47 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 });
 
+// Update Active Button Visual Styles
+function updateModalButtonStates() {
+  const launcherOpen = !launcherModal.classList.contains('hidden');
+  const runsOpen = !runsModal.classList.contains('hidden');
+  const consoleOpen = !consoleDrawer.classList.contains('hidden');
+
+  if (launcherOpen) {
+    toggleLauncherBtn.classList.add('ring-2', 'ring-blue-400', 'bg-blue-700');
+  } else {
+    toggleLauncherBtn.classList.remove('ring-2', 'ring-blue-400', 'bg-blue-700');
+  }
+
+  if (runsOpen) {
+    toggleRunsBtn.classList.add('ring-2', 'ring-purple-400', 'bg-slate-700');
+  } else {
+    toggleRunsBtn.classList.remove('ring-2', 'ring-purple-400', 'bg-slate-700');
+  }
+
+  if (consoleOpen) {
+    toggleConsoleBtn.classList.add('ring-2', 'ring-amber-400', 'bg-slate-700');
+  } else {
+    toggleConsoleBtn.classList.remove('ring-2', 'ring-amber-400', 'bg-slate-700');
+  }
+}
+
 // Setup Floating Modal Visibility & Toggles
 function setupModalToggles() {
   toggleLauncherBtn.addEventListener('click', () => {
     const isHidden = launcherModal.classList.contains('hidden');
     if (isHidden) {
-      runsModal.classList.add('hidden'); // Close runs if opening launcher
+      runsModal.classList.add('hidden');
       launcherModal.classList.remove('hidden');
     } else {
       launcherModal.classList.add('hidden');
     }
+    updateModalButtonStates();
   });
 
   closeLauncherBtn.addEventListener('click', () => {
     launcherModal.classList.add('hidden');
+    updateModalButtonStates();
   });
 
   toggleRunsBtn.addEventListener('click', () => {
@@ -126,26 +206,49 @@ function setupModalToggles() {
     } else {
       runsModal.classList.add('hidden');
     }
+    updateModalButtonStates();
   });
 
   closeRunsBtn.addEventListener('click', () => {
     runsModal.classList.add('hidden');
+    updateModalButtonStates();
   });
 
   toggleConsoleBtn.addEventListener('click', () => {
     consoleDrawer.classList.toggle('hidden');
     minConsoleBtn.classList.toggle('hidden', !consoleDrawer.classList.contains('hidden'));
+    updateModalButtonStates();
   });
 
   closeConsoleBtn.addEventListener('click', () => {
     consoleDrawer.classList.add('hidden');
     minConsoleBtn.classList.remove('hidden');
+    updateModalButtonStates();
   });
 
   minConsoleBtn.addEventListener('click', () => {
     consoleDrawer.classList.remove('hidden');
     minConsoleBtn.classList.add('hidden');
+    updateModalButtonStates();
   });
+
+  // Close modals when clicking on background 3D viewport canvas
+  viewportContainer.addEventListener('click', (e) => {
+    if (e.target === viewportContainer || e.target.tagName === 'CANVAS') {
+      let changed = false;
+      if (!launcherModal.classList.contains('hidden')) {
+        launcherModal.classList.add('hidden');
+        changed = true;
+      }
+      if (!runsModal.classList.contains('hidden')) {
+        runsModal.classList.add('hidden');
+        changed = true;
+      }
+      if (changed) updateModalButtonStates();
+    }
+  });
+
+  updateModalButtonStates();
 }
 
 // WebSocket Telemetry Connection
@@ -192,7 +295,6 @@ function updateJobStatus(job) {
   currentJobState = job.state;
   statusText.textContent = job.state.toUpperCase();
 
-  // Reset Dot animations
   statusDot.className = 'h-2 w-2 rounded-full';
 
   switch (job.state) {
@@ -202,7 +304,6 @@ function updateJobStatus(job) {
       headerStopBtn.classList.remove('hidden');
       startBtn.disabled = true;
 
-      // Start live streaming active submaps & trajectory if not already started
       if (job.run_name && job.run_name !== currentRunName) {
         startLiveTracking(job.run_name);
       }
@@ -223,6 +324,7 @@ function updateJobStatus(job) {
       if (window.lucide) lucide.createIcons();
       stopLiveTracking(true);
       fetchRuns();
+      showToast('SLAM run completed successfully!', 'success');
       break;
 
     case 'stopped':
@@ -235,6 +337,7 @@ function updateJobStatus(job) {
       if (window.lucide) lucide.createIcons();
       stopLiveTracking(false);
       fetchRuns();
+      showToast(`SLAM job ended: ${job.state}`, 'warn');
       break;
 
     default: // idle
@@ -247,7 +350,6 @@ function updateJobStatus(job) {
       break;
   }
 
-  // Update KPI counters
   metricSpeed.textContent = job.speed ? `${job.speed.toFixed(1)}x` : '0.0x';
   metricBagTime.textContent = job.bag_time ? `${job.bag_time.toFixed(1)}s` : '0.0s';
   metricScans.textContent = job.scans || '0';
@@ -315,7 +417,6 @@ async function fetchRuns() {
     const runs = await res.json();
     runsList.innerHTML = '';
 
-    // Update 3D Run Select Dropdown
     const prevSelectVal = viewerRunSelect.value;
     viewerRunSelect.innerHTML = '<option value="">Select a run...</option>';
 
@@ -325,13 +426,11 @@ async function fetchRuns() {
     }
 
     runs.forEach(run => {
-      // Add to 3D Dropdown
       const opt = document.createElement('option');
       opt.value = run.name;
       opt.textContent = `${run.name} (${run.submaps_count} submaps)`;
       viewerRunSelect.appendChild(opt);
 
-      // Add to Past Runs Modal
       const item = document.createElement('div');
       item.className = 'bg-slate-950/70 border border-slate-800/80 rounded-lg p-2.5 hover:border-slate-700 transition flex items-center justify-between gap-3 text-xs';
       item.innerHTML = `
@@ -345,10 +444,10 @@ async function fetchRuns() {
             <span>${run.size_human}</span>
           </div>
         </div>
-        <div class="flex items-center gap-1 shrink-0">
-          <button onclick="openRunIn3D('${run.name}')" class="p-1.5 bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 rounded flex items-center gap-1 transition" title="View in 3D">
+        <div class="flex items-center gap-1.5 shrink-0">
+          <button onclick="openRunIn3D('${run.name}')" class="px-2.5 py-1 bg-blue-600 hover:bg-blue-500 active:scale-95 text-white rounded flex items-center gap-1 transition text-[11px] font-medium shadow-sm" title="View in 3D Viewport">
             <i data-lucide="box" class="w-3.5 h-3.5"></i>
-            <span class="text-[11px] font-medium hidden sm:inline">3D</span>
+            <span>3D</span>
           </button>
           ${run.has_traj_lidar ? `
             <a href="/api/runs/${encodeURIComponent(run.name)}/trajectory?opt=true" download="${run.name}_traj_lidar.txt" class="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded flex items-center transition" title="Download Optimized LiDAR Trajectory (TUM)">
@@ -361,10 +460,12 @@ async function fetchRuns() {
 
     if (window.lucide) lucide.createIcons();
 
-    if (prevSelectVal) {
+    if (prevSelectVal && Array.from(viewerRunSelect.options).some(o => o.value === prevSelectVal)) {
       viewerRunSelect.value = prevSelectVal;
     } else if (runs.length > 0 && !currentRunName) {
       viewerRunSelect.value = runs[0].name;
+      // Auto-load latest run on initial open so screen isn't empty!
+      loadMapRun(runs[0].name);
     }
   } catch (err) {
     runsList.innerHTML = '<div class="text-xs text-rose-500 py-4 text-center">Failed to load run history</div>';
@@ -374,8 +475,10 @@ async function fetchRuns() {
 // Open run directly in 3D
 window.openRunIn3D = function(runName) {
   runsModal.classList.add('hidden');
+  updateModalButtonStates();
   viewerRunSelect.value = runName;
   loadMapRun(runName);
+  showToast(`Loading 3D map: ${runName}...`, 'info');
 };
 
 // Start SLAM Job
@@ -398,6 +501,7 @@ async function handleStartJob(e) {
 
   startBtn.disabled = true;
   startBtn.textContent = 'Launching...';
+  showToast('Starting SLAM run...', 'info');
 
   try {
     const res = await fetch('/api/jobs/start', {
@@ -411,17 +515,19 @@ async function handleStartJob(e) {
     }
     const job = await res.json();
 
-    // Auto-close launcher & open console for visibility
     launcherModal.classList.add('hidden');
     consoleDrawer.classList.remove('hidden');
     minConsoleBtn.classList.add('hidden');
+    updateModalButtonStates();
 
     updateJobStatus(job);
     startLiveTracking(job.run_name);
+    showToast(`SLAM Job launched: ${job.run_name}`, 'success');
   } catch (err) {
     alert(`Could not start job: ${err.message}`);
     startBtn.disabled = false;
     startBtn.textContent = 'Start SLAM Run';
+    showToast(`Failed: ${err.message}`, 'error');
   }
 }
 
@@ -430,6 +536,7 @@ async function handleStopJob() {
   if (!confirm('Are you sure you want to stop and finalize the current SLAM run?')) return;
   headerStopBtn.disabled = true;
   headerStopBtn.textContent = 'Finalizing...';
+  showToast('Finalizing run and generating loop-closed trajectory...', 'info');
 
   try {
     const res = await fetch('/api/jobs/stop', { method: 'POST' });
@@ -453,7 +560,7 @@ function initThreeJS() {
 
   // Scene
   threeScene = new THREE.Scene();
-  threeScene.background = new THREE.Color(0x020617); // Slate-950
+  threeScene.background = new THREE.Color(0x020617);
 
   // Camera (Z-Up for SLAM / Robotics convention)
   threeCamera = new THREE.PerspectiveCamera(55, width / height, 0.1, 5000);
@@ -482,6 +589,9 @@ function initThreeJS() {
   const axes = new THREE.AxesHelper(3.0);
   threeScene.add(axes);
 
+  // Active Submap 3D Marker
+  createActiveSubmapMarker();
+
   // Window Resize Listener
   window.addEventListener('resize', onWindowResize);
 
@@ -503,16 +613,72 @@ function onWindowResize() {
   threeRenderer.setSize(w, h);
 }
 
+// Create 3D Active Submap Visual Indicator (Box + Axes + Ring)
+function createActiveSubmapMarker() {
+  if (activeSubmapMarker) return;
+  const group = new THREE.Group();
+
+  // Wireframe bounding cube
+  const boxGeom = new THREE.BoxGeometry(5.0, 5.0, 3.5);
+  const boxMat = new THREE.LineBasicMaterial({ color: 0x38bdf8, linewidth: 2, transparent: true, opacity: 0.9 });
+  const wireframe = new THREE.LineSegments(new THREE.WireframeGeometry(boxGeom), boxMat);
+  group.add(wireframe);
+
+  // Submap local coordinate frame axes (X: Red, Y: Green, Z: Blue)
+  const axes = new THREE.AxesHelper(3.5);
+  group.add(axes);
+
+  // Origin point dot
+  const dotGeom = new THREE.SphereGeometry(0.35, 16, 16);
+  const dotMat = new THREE.MeshBasicMaterial({ color: 0x60a5fa });
+  const dot = new THREE.Mesh(dotGeom, dotMat);
+  group.add(dot);
+
+  group.visible = false;
+  threeScene.add(group);
+  activeSubmapMarker = group;
+}
+
+function updateActiveSubmapMarker(submapId) {
+  if (!activeSubmapMarker) createActiveSubmapMarker();
+  const sm = currentRunSubmaps.find(s => s.id === submapId);
+  if (!sm) {
+    activeSubmapMarker.visible = false;
+    return;
+  }
+
+  activeSubmapMarker.position.set(sm.pos[0], sm.pos[1], sm.pos[2]);
+  if (sm.matrix) {
+    const mat4 = new THREE.Matrix4();
+    mat4.fromArray(sm.matrix);
+    activeSubmapMarker.setRotationFromMatrix(mat4);
+  }
+  activeSubmapMarker.visible = true;
+}
+
 // 3D HUD Controls Setup
 function setup3DViewerControls() {
+  // Auto-load immediately when a run is selected from dropdown
+  viewerRunSelect.addEventListener('change', (e) => {
+    const runName = e.target.value;
+    if (runName) {
+      loadMapRun(runName);
+    }
+  });
+
   viewerLoadBtn.addEventListener('click', () => {
     const runName = viewerRunSelect.value;
-    if (runName) loadMapRun(runName);
+    if (runName) {
+      loadMapRun(runName);
+    } else {
+      showToast('Select a run from the dropdown first', 'warn');
+    }
   });
 
   viewerIsolateToggle.addEventListener('change', (e) => {
     isIsolated = e.target.checked;
     updateSubmapVisibility();
+    showToast(isIsolated ? 'Isolate mode ON (Single submap)' : 'Showing all submaps', 'info');
   });
 
   viewerSubmapSlider.addEventListener('input', (e) => {
@@ -521,6 +687,11 @@ function setup3DViewerControls() {
   });
 
   viewerPrevBtn.addEventListener('click', () => {
+    if (currentRunSubmaps.length === 0) {
+      showToast('No submaps loaded', 'warn');
+      return;
+    }
+    if (activeSubmapId === null) activeSubmapId = 0;
     if (activeSubmapId > 0) {
       activeSubmapId--;
       viewerSubmapSlider.value = activeSubmapId;
@@ -529,6 +700,11 @@ function setup3DViewerControls() {
   });
 
   viewerNextBtn.addEventListener('click', () => {
+    if (currentRunSubmaps.length === 0) {
+      showToast('No submaps loaded', 'warn');
+      return;
+    }
+    if (activeSubmapId === null) activeSubmapId = -1;
     if (activeSubmapId < currentRunSubmaps.length - 1) {
       activeSubmapId++;
       viewerSubmapSlider.value = activeSubmapId;
@@ -539,22 +715,126 @@ function setup3DViewerControls() {
   viewerFocusBtn.addEventListener('click', () => {
     if (activeSubmapId !== null) {
       focusCameraOnSubmap(activeSubmapId);
+      showToast(`Focused on Submap #${String(activeSubmapId).padStart(4, '0')}`, 'info');
+    } else {
+      showToast('No active submap to focus', 'warn');
     }
   });
+
+  viewerFitBtn.addEventListener('click', fitAllInView);
+  viewerTopdownBtn.addEventListener('click', setTopDownView);
 
   viewerColorMode.addEventListener('change', (e) => {
     colorMode = e.target.value;
     submapCache.forEach((points, id) => {
       applySubmapColors(points.geometry, id);
     });
+    showToast(`Color mode: ${colorMode === 'rainbow' ? 'Rainbow (Z-altitude)' : 'Flat White'}`, 'info');
   });
 
   viewerPointSize.addEventListener('input', (e) => {
     pointSize = parseFloat(e.target.value);
-    submapCache.forEach((points) => {
-      points.material.size = pointSize;
+    submapCache.forEach((points, id) => {
+      points.material.size = (id === activeSubmapId && !isIsolated) ? pointSize * 1.5 : pointSize;
+      points.material.needsUpdate = true;
     });
   });
+
+  // Global Keyboard Shortcuts
+  window.addEventListener('keydown', (e) => {
+    if (['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName)) {
+      if (e.key === 'Escape') document.activeElement.blur();
+      return;
+    }
+
+    if (e.key === 'Escape') {
+      launcherModal.classList.add('hidden');
+      runsModal.classList.add('hidden');
+      updateModalButtonStates();
+    } else if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      viewerPrevBtn.click();
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      viewerNextBtn.click();
+    } else if (e.key === 'f' || e.key === 'F') {
+      viewerFocusBtn.click();
+    } else if (e.key === 'r' || e.key === 'R') {
+      viewerFitBtn.click();
+    } else if (e.key === 't' || e.key === 'T') {
+      viewerTopdownBtn.click();
+    } else if (e.key === 'i' || e.key === 'I') {
+      viewerIsolateToggle.checked = !viewerIsolateToggle.checked;
+      viewerIsolateToggle.dispatchEvent(new Event('change'));
+    }
+  });
+}
+
+// Fit Entire Point Cloud & Trajectory in Frustum
+function fitAllInView() {
+  const box = new THREE.Box3();
+  if (threeTrajectoryLine && threeTrajectoryLine.geometry && threeTrajectoryLine.geometry.attributes.position) {
+    threeTrajectoryLine.geometry.computeBoundingBox();
+    if (threeTrajectoryLine.geometry.boundingBox) {
+      box.union(threeTrajectoryLine.geometry.boundingBox);
+    }
+  }
+  submapCache.forEach((points) => {
+    if (points.geometry && points.geometry.attributes.position) {
+      points.geometry.computeBoundingBox();
+      if (points.geometry.boundingBox) {
+        box.union(points.geometry.boundingBox);
+      }
+    }
+  });
+
+  if (box.isEmpty()) {
+    showToast('No 3D points loaded to frame', 'info');
+    return;
+  }
+
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
+  const maxDim = Math.max(size.x, size.y, size.z, 25.0);
+  const fov = threeCamera.fov * (Math.PI / 180);
+  const cameraDist = Math.abs(maxDim / 2 / Math.tan(fov / 2)) * 1.25;
+
+  threeControls.target.copy(center);
+  threeCamera.position.set(center.x - cameraDist * 0.6, center.y - cameraDist * 0.6, center.z + cameraDist * 0.7);
+  threeCamera.up.set(0, 0, 1);
+  threeControls.update();
+  showToast('Fit view to full map', 'info');
+}
+
+// Top-Down Bird's Eye View (Snaps to 2D Plan View)
+function setTopDownView() {
+  const box = new THREE.Box3();
+  if (threeTrajectoryLine && threeTrajectoryLine.geometry && threeTrajectoryLine.geometry.attributes.position) {
+    threeTrajectoryLine.geometry.computeBoundingBox();
+    if (threeTrajectoryLine.geometry.boundingBox) {
+      box.union(threeTrajectoryLine.geometry.boundingBox);
+    }
+  }
+  submapCache.forEach((points) => {
+    if (points.geometry && points.geometry.attributes.position) {
+      points.geometry.computeBoundingBox();
+      if (points.geometry.boundingBox) {
+        box.union(points.geometry.boundingBox);
+      }
+    }
+  });
+
+  const center = box.isEmpty() ? new THREE.Vector3(0, 0, 0) : box.getCenter(new THREE.Vector3());
+  const size = box.isEmpty() ? new THREE.Vector3(50, 50, 20) : box.getSize(new THREE.Vector3());
+  const maxDim = Math.max(size.x, size.y, 35.0);
+  const fov = threeCamera.fov * (Math.PI / 180);
+  const cameraDist = Math.abs(maxDim / 2 / Math.tan(fov / 2)) * 1.25;
+
+  threeControls.target.copy(center);
+  threeCamera.position.set(center.x, center.y - 0.01, center.z + cameraDist);
+  threeCamera.up.set(0, 1, 0); // Y-forward
+  threeControls.update();
+  showToast("Top-down bird's-eye view", 'info');
 }
 
 // Clear Scene Between Runs
@@ -573,6 +853,10 @@ function clear3DScene() {
     threeTrajectoryLine = null;
   }
 
+  if (activeSubmapMarker) {
+    activeSubmapMarker.visible = false;
+  }
+
   currentRunSubmaps = [];
   activeSubmapId = null;
   viewerSubmapSlider.max = 0;
@@ -588,7 +872,10 @@ async function loadMapRun(runName) {
   clear3DScene();
 
   viewerLoadBtn.disabled = true;
-  viewerLoadBtn.textContent = 'Loading...';
+  viewerLoadBtn.innerHTML = '<i data-lucide="rotate-cw" class="w-3 h-3 animate-spin"></i><span>Loading...</span>';
+  if (window.lucide) lucide.createIcons();
+
+  showToast(`Loading 3D Map: ${runName}...`, 'info');
 
   try {
     // 1. Fetch Trajectory Binary
@@ -602,6 +889,7 @@ async function loadMapRun(runName) {
     if (currentRunSubmaps.length === 0) {
       hudSubmapText.textContent = 'No submaps recorded';
       viewerHud.classList.remove('hidden');
+      showToast(`Run ${runName} has no submaps recorded`, 'warn');
       return;
     }
 
@@ -610,23 +898,26 @@ async function loadMapRun(runName) {
     viewerSubmapSlider.value = 0;
     viewerHud.classList.remove('hidden');
 
-    // 3. Load First Batch of Submaps
-    const initialBatch = currentRunSubmaps.slice(0, 30);
+    // 3. Load First Batch of Submaps (first 35 for instantaneous initial view)
+    const initialBatch = currentRunSubmaps.slice(0, 35);
     await Promise.all(initialBatch.map(sm => loadSubmapPoints(runName, sm.id)));
 
     onActiveSubmapChanged(0);
-    focusCameraOnSubmap(0);
+    fitAllInView();
 
-    // Stream remaining submaps in background
-    if (currentRunSubmaps.length > 30) {
-      streamRemainingSubmaps(runName, 30);
+    showToast(`Loaded ${currentRunSubmaps.length} submaps (${runName})`, 'success');
+
+    // Stream remaining submaps in background smoothly
+    if (currentRunSubmaps.length > 35) {
+      streamRemainingSubmaps(runName, 35);
     }
   } catch (err) {
     console.error('Failed to load map run:', err);
-    alert(`Could not load map: ${err.message}`);
+    showToast(`Could not load map: ${err.message}`, 'error');
   } finally {
     viewerLoadBtn.disabled = false;
-    viewerLoadBtn.textContent = 'Load';
+    viewerLoadBtn.innerHTML = '<i data-lucide="rotate-cw" class="w-3 h-3"></i><span>Load</span>';
+    if (window.lucide) lucide.createIcons();
   }
 }
 
@@ -670,7 +961,9 @@ async function loadSubmapPoints(runName, submapId) {
     const mat = new THREE.PointsMaterial({
       size: pointSize,
       vertexColors: true,
-      sizeAttenuation: true
+      sizeAttenuation: false, // Crisp screen-space points at any distance
+      transparent: true,
+      opacity: (submapId === activeSubmapId || isIsolated) ? 1.0 : 0.6
     });
 
     const pointsObj = new THREE.Points(geom, mat);
@@ -766,15 +1059,27 @@ function onActiveSubmapChanged(submapId) {
   loadSubmapPoints(currentRunName, submapId);
 }
 
-// Update Submap Visibility for Isolation Mode
+// Update Submap Visibility for Isolation Mode & Visual Pop
 function updateSubmapVisibility() {
   submapCache.forEach((points, id) => {
     if (isIsolated) {
       points.visible = (id === activeSubmapId);
+      points.material.opacity = 1.0;
+      points.material.size = pointSize * 1.2;
     } else {
       points.visible = true;
+      if (activeSubmapId !== null && id === activeSubmapId) {
+        points.material.opacity = 1.0;
+        points.material.size = pointSize * 1.5;
+      } else {
+        points.material.opacity = 0.55;
+        points.material.size = pointSize;
+      }
     }
+    points.material.needsUpdate = true;
   });
+
+  updateActiveSubmapMarker(activeSubmapId);
 }
 
 // Focus Camera smoothly on Submap Position
@@ -840,7 +1145,6 @@ function startLiveTracking(runName) {
     }
   }
 
-  // Poll every 1.5 seconds while job runs
   pollLiveRun();
   liveStreamTimer = setInterval(pollLiveRun, 1500);
 }
@@ -851,7 +1155,6 @@ function stopLiveTracking(loadFinalOptimized = true) {
     liveStreamTimer = null;
   }
   if (loadFinalOptimized && currentRunName) {
-    // Reload final loop-closed trajectory and submap poses
     setTimeout(() => {
       loadMapRun(currentRunName);
     }, 1000);

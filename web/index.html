@@ -254,25 +254,40 @@
       <!-- Run Selector -->
       <div class="flex items-center gap-1.5">
         <span class="text-slate-400 font-medium">Run:</span>
-        <select id="viewer-run-select" class="bg-slate-950 border border-slate-800 rounded px-2.5 py-1 text-slate-200 text-xs focus:outline-none focus:border-blue-500">
+        <select id="viewer-run-select" class="bg-slate-950 border border-slate-800 rounded px-2.5 py-1 text-slate-200 text-xs focus:outline-none focus:border-blue-500 cursor-pointer">
           <option value="">Select a run...</option>
         </select>
-        <button id="viewer-load-btn" class="px-2.5 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded font-medium transition text-xs shadow-sm">Load</button>
+        <button id="viewer-load-btn" class="px-2.5 py-1 bg-blue-600 hover:bg-blue-500 active:scale-95 text-white rounded font-medium transition text-xs shadow-sm flex items-center gap-1" title="Reload Run Data">
+          <i data-lucide="rotate-cw" class="w-3 h-3"></i>
+          <span>Load</span>
+        </button>
       </div>
 
       <div class="h-4 w-px bg-slate-800"></div>
 
-      <!-- Submap Isolation Controls -->
+      <!-- Submap Navigation & Isolation -->
       <div class="flex items-center gap-1.5">
-        <label class="flex items-center gap-1.5 cursor-pointer font-medium text-slate-300">
+        <label class="flex items-center gap-1.5 cursor-pointer font-medium text-slate-300 select-none" title="Show Only Active Submap (I)">
           <input type="checkbox" id="viewer-isolate-toggle" class="rounded border-slate-700 bg-slate-900 text-blue-600 focus:ring-0">
-          Isolate
+          <span>Isolate</span>
         </label>
-        <button id="viewer-prev-btn" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 rounded text-slate-200 font-mono" title="Previous submap">&lt;</button>
-        <input type="range" id="viewer-submap-slider" min="0" max="0" value="0" class="w-24 accent-blue-600 cursor-pointer">
-        <button id="viewer-next-btn" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 rounded text-slate-200 font-mono" title="Next submap">&gt;</button>
-        <button id="viewer-focus-btn" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-blue-400 rounded flex items-center gap-1 transition" title="Focus camera on submap">
+        <button id="viewer-prev-btn" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 active:scale-95 rounded text-slate-200 font-mono font-bold transition" title="Previous Submap (Left Arrow)">&lt;</button>
+        <input type="range" id="viewer-submap-slider" min="0" max="0" value="0" class="w-24 accent-blue-600 cursor-pointer" title="Scrub Submaps">
+        <button id="viewer-next-btn" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 active:scale-95 rounded text-slate-200 font-mono font-bold transition" title="Next Submap (Right Arrow)">&gt;</button>
+        <button id="viewer-focus-btn" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 active:scale-95 text-blue-400 rounded flex items-center gap-1 transition" title="Focus Camera on Active Submap (F)">
           <i data-lucide="crosshair" class="w-3.5 h-3.5"></i> Focus
+        </button>
+      </div>
+
+      <div class="h-4 w-px bg-slate-800"></div>
+
+      <!-- Camera Presets -->
+      <div class="flex items-center gap-1">
+        <button id="viewer-fit-btn" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 rounded flex items-center gap-1 transition" title="Fit Entire Map into Camera (R)">
+          <i data-lucide="maximize" class="w-3.5 h-3.5 text-emerald-400"></i> Fit
+        </button>
+        <button id="viewer-topdown-btn" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 rounded flex items-center gap-1 transition" title="Top-Down Bird's Eye View (T)">
+          <i data-lucide="compass" class="w-3.5 h-3.5 text-amber-400"></i> Top
         </button>
       </div>
 
@@ -280,19 +295,25 @@
 
       <!-- Color Mode & Point Size -->
       <div class="flex items-center gap-2">
-        <select id="viewer-color-mode" class="bg-slate-950 border border-slate-800 rounded px-2 py-1 text-slate-200 text-xs focus:outline-none focus:border-blue-500">
+        <select id="viewer-color-mode" class="bg-slate-950 border border-slate-800 rounded px-2 py-1 text-slate-200 text-xs focus:outline-none focus:border-blue-500 cursor-pointer">
           <option value="rainbow">Rainbow (Z)</option>
           <option value="flat">Flat White</option>
         </select>
         <span class="text-slate-400">Size:</span>
-        <input type="range" id="viewer-point-size" min="1" max="10" value="2" class="w-16 accent-blue-600 cursor-pointer">
+        <input type="range" id="viewer-point-size" min="1" max="8" value="2" class="w-16 accent-blue-600 cursor-pointer" title="Adjust Point Size">
       </div>
 
       <!-- Live Active Submap HUD Text -->
-      <div id="viewer-hud" class="hidden text-slate-300 font-mono text-[11px] border-l border-slate-800 pl-3">
+      <div id="viewer-hud" class="hidden text-slate-300 font-mono text-[11px] border-l border-slate-800 pl-3 flex items-center gap-2">
         <span id="hud-submap-text">Submap: None</span>
       </div>
     </div>
+  </div>
+
+  <!-- Toast Notification Popover -->
+  <div id="toast" class="hidden opacity-0 fixed bottom-16 left-1/2 -translate-x-1/2 z-50 bg-slate-900/95 backdrop-blur border border-slate-700 text-slate-200 px-4 py-2 rounded-xl shadow-2xl text-xs flex items-center gap-2 transition-all duration-300 pointer-events-none">
+    <i data-lucide="info" class="w-4 h-4 text-blue-400 shrink-0" id="toast-icon"></i>
+    <span id="toast-msg">Notification</span>
   </div>
 
   <!-- Main JavaScript Application -->
