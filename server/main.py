@@ -88,7 +88,8 @@ _submap_metadata_cache = {}
 
 @app.get("/api/runs/{run_name}/submaps")
 async def get_run_submaps(run_name: str):
-    if run_name in _submap_metadata_cache:
+    is_live = (manager.job.state in ["running", "finalizing"] and manager.job.run_name == run_name)
+    if not is_live and run_name in _submap_metadata_cache:
         return _submap_metadata_cache[run_name]
 
     run_dir = manager.results_dir / run_name
