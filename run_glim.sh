@@ -111,6 +111,8 @@ if [[ "$WEB_MODE" -eq 1 ]]; then
   echo " Data Root     : ${DATA_DIR}"
   echo "=========================================================="
 
+  docker rm -f glim_web_service 2>/dev/null || true
+
   exec docker run --rm -it \
     --name glim_web_service \
     --gpus all \
