@@ -21,6 +21,8 @@
 #include <glim/util/time_keeper.hpp>
 #include <glim/util/raw_points.hpp>
 #include <glim/util/extension_module.hpp>
+#include <boost/format.hpp>
+#include <boost/filesystem.hpp>
 #include <glim/preprocess/cloud_preprocessor.hpp>
 #include <glim/odometry/async_odometry_estimation.hpp>
 #include <glim/odometry/estimation_frame.hpp>
@@ -465,9 +467,14 @@ int main(int argc, char** argv) {
       }
 
       auto submaps = sub_mapping->get_results();
-      if (global_mapping) {
-        for (const auto& submap : submaps) {
+      for (const auto& submap : submaps) {
+        if (global_mapping) {
           global_mapping->insert_submap(submap);
+        }
+        // Stream submap to disk immediately so web UI can render it live
+        const std::string sm_path = boost::str(boost::format("%s/%06d") % output_dir % submap->id);
+        if (!boost::filesystem::exists(sm_path)) {
+          submap->save(sm_path);
         }
       }
     }

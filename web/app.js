@@ -1,23 +1,20 @@
-// State
+// GLIM Headless SLAM Dashboard & Real-Time Three.js Visualizer
 let ws = null;
-let autoScroll = true;
-let isJobRunning = false;
-
-// 3D Visualizer State
-let threeScene = null;
-let threeCamera = null;
-let threeRenderer = null;
-let threeControls = null;
-let threeGrid = null;
-let currentRunSubmaps = [];
+let currentJobState = 'idle';
 let currentRunName = null;
-let activeSubmapId = 0;
-let submapCache = new Map(); // id -> THREE.Points
-let submapMarkers = null; // THREE.Points for origin spheres
-let trajLine = null; // THREE.Line
-let pointSize = 2.0;
+let autoScroll = true;
+let totalLogLines = 0;
+let liveStreamTimer = null;
+
+// Three.js State
+let threeScene, threeCamera, threeRenderer, threeControls;
+let currentRunSubmaps = [];
+let submapCache = new Map(); // submap_id -> THREE.Points
+let threeTrajectoryLine = null;
+let activeSubmapId = null;
+let isIsolated = false;
 let colorMode = 'rainbow';
-let isIsolated = true;
+let pointSize = 2.0;
 
 // DOM Elements
 const statusBadge = document.getElementById('service-status-badge');
@@ -26,30 +23,44 @@ const statusText = document.getElementById('status-text');
 const wsIndicator = document.getElementById('ws-indicator');
 const wsText = document.getElementById('ws-text');
 
+// Floating Modals & Drawers
+const launcherModal = document.getElementById('launcher-modal');
+const runsModal = document.getElementById('runs-modal');
+const consoleDrawer = document.getElementById('console-drawer');
+const minConsoleBtn = document.getElementById('min-console-btn');
+
+const toggleLauncherBtn = document.getElementById('toggle-launcher-btn');
+const closeLauncherBtn = document.getElementById('close-launcher-btn');
+const toggleRunsBtn = document.getElementById('toggle-runs-btn');
+const closeRunsBtn = document.getElementById('close-runs-btn');
+const toggleConsoleBtn = document.getElementById('toggle-console-btn');
+const closeConsoleBtn = document.getElementById('close-console-btn');
+
+// Launcher Form
+const launcherForm = document.getElementById('launcher-form');
 const datasetSelect = document.getElementById('dataset-select');
 const runNameInput = document.getElementById('run-name-input');
 const startBtn = document.getElementById('start-btn');
-const stopBtn = document.getElementById('stop-btn');
-const launcherForm = document.getElementById('launcher-form');
+const headerStopBtn = document.getElementById('header-stop-btn');
 const runsList = document.getElementById('runs-list');
-const logConsole = document.getElementById('log-console');
-const autoScrollToggle = document.getElementById('autoscroll-toggle');
 
+// Log Console
+const logConsole = document.getElementById('log-console');
+const logCount = document.getElementById('log-count');
+const autoScrollToggle = document.getElementById('autoscroll-toggle');
+const clearLogsBtn = document.getElementById('clear-logs-btn');
+
+// Top KPIs
 const metricBagTime = document.getElementById('metric-bag-time');
 const metricSpeed = document.getElementById('metric-speed');
 const metricScans = document.getElementById('metric-scans');
-const metricElapsed = document.getElementById('metric-elapsed');
 const metricQueueOdom = document.getElementById('metric-queue-odom');
 const metricQueueSub = document.getElementById('metric-queue-sub');
 const metricQueueGlob = document.getElementById('metric-queue-glob');
 
-// Tab Elements
-const tabBtn3d = document.getElementById('tab-btn-3d');
-const tabBtnConsole = document.getElementById('tab-btn-console');
-const tabContent3d = document.getElementById('tab-content-3d');
-const tabContentConsole = document.getElementById('tab-content-console');
-
 // 3D Controls Elements
+const viewportContainer = document.getElementById('viewport-3d');
+const viewportPlaceholder = document.getElementById('viewport-placeholder');
 const viewerRunSelect = document.getElementById('viewer-run-select');
 const viewerLoadBtn = document.getElementById('viewer-load-btn');
 const viewerIsolateToggle = document.getElementById('viewer-isolate-toggle');
@@ -59,56 +70,85 @@ const viewerSubmapSlider = document.getElementById('viewer-submap-slider');
 const viewerFocusBtn = document.getElementById('viewer-focus-btn');
 const viewerColorMode = document.getElementById('viewer-color-mode');
 const viewerPointSize = document.getElementById('viewer-point-size');
-const viewportContainer = document.getElementById('viewport-3d');
-const viewportPlaceholder = document.getElementById('viewport-placeholder');
 const viewerHud = document.getElementById('viewer-hud');
 const hudSubmapText = document.getElementById('hud-submap-text');
 
-// Initialize
+// Initialize Application
 document.addEventListener('DOMContentLoaded', () => {
   if (window.lucide) lucide.createIcons();
+
+  initThreeJS();
   fetchDatasets();
   fetchRuns();
   connectWebSocket();
-  setupTabs();
+  setupModalToggles();
   setup3DViewerControls();
 
-  // Launcher & Console Listeners
+  // Launcher & Actions
   launcherForm.addEventListener('submit', handleStartJob);
-  stopBtn.addEventListener('click', handleStopJob);
+  headerStopBtn.addEventListener('click', handleStopJob);
   document.getElementById('refresh-datasets-btn').addEventListener('click', fetchDatasets);
   document.getElementById('refresh-runs-btn').addEventListener('click', fetchRuns);
-  document.getElementById('clear-logs-btn').addEventListener('click', () => {
+
+  clearLogsBtn.addEventListener('click', () => {
     logConsole.innerHTML = '';
+    totalLogLines = 0;
+    updateLogCount();
   });
+
   autoScrollToggle.addEventListener('change', (e) => {
     autoScroll = e.target.checked;
   });
 });
 
-// Tab Setup
-function setupTabs() {
-  tabBtn3d.addEventListener('click', () => switchTab('3d'));
-  tabBtnConsole.addEventListener('click', () => switchTab('console'));
+// Setup Floating Modal Visibility & Toggles
+function setupModalToggles() {
+  toggleLauncherBtn.addEventListener('click', () => {
+    const isHidden = launcherModal.classList.contains('hidden');
+    if (isHidden) {
+      runsModal.classList.add('hidden'); // Close runs if opening launcher
+      launcherModal.classList.remove('hidden');
+    } else {
+      launcherModal.classList.add('hidden');
+    }
+  });
+
+  closeLauncherBtn.addEventListener('click', () => {
+    launcherModal.classList.add('hidden');
+  });
+
+  toggleRunsBtn.addEventListener('click', () => {
+    const isHidden = runsModal.classList.contains('hidden');
+    if (isHidden) {
+      launcherModal.classList.add('hidden');
+      runsModal.classList.remove('hidden');
+      fetchRuns();
+    } else {
+      runsModal.classList.add('hidden');
+    }
+  });
+
+  closeRunsBtn.addEventListener('click', () => {
+    runsModal.classList.add('hidden');
+  });
+
+  toggleConsoleBtn.addEventListener('click', () => {
+    consoleDrawer.classList.toggle('hidden');
+    minConsoleBtn.classList.toggle('hidden', !consoleDrawer.classList.contains('hidden'));
+  });
+
+  closeConsoleBtn.addEventListener('click', () => {
+    consoleDrawer.classList.add('hidden');
+    minConsoleBtn.classList.remove('hidden');
+  });
+
+  minConsoleBtn.addEventListener('click', () => {
+    consoleDrawer.classList.remove('hidden');
+    minConsoleBtn.classList.add('hidden');
+  });
 }
 
-function switchTab(tab) {
-  if (tab === '3d') {
-    tabBtn3d.className = 'px-4 py-2 text-xs font-semibold rounded-lg bg-blue-600/20 text-blue-400 border border-blue-500/30 flex items-center gap-2 transition';
-    tabBtnConsole.className = 'px-4 py-2 text-xs font-medium rounded-lg text-slate-400 hover:text-slate-200 border border-transparent hover:bg-slate-800/50 flex items-center gap-2 transition';
-    tabContent3d.classList.remove('hidden');
-    tabContentConsole.classList.add('hidden');
-    onViewportResize();
-  } else {
-    tabBtnConsole.className = 'px-4 py-2 text-xs font-semibold rounded-lg bg-blue-600/20 text-blue-400 border border-blue-500/30 flex items-center gap-2 transition';
-    tabBtn3d.className = 'px-4 py-2 text-xs font-medium rounded-lg text-slate-400 hover:text-slate-200 border border-transparent hover:bg-slate-800/50 flex items-center gap-2 transition';
-    tabContentConsole.classList.remove('hidden');
-    tabContent3d.classList.add('hidden');
-  }
-  if (window.lucide) lucide.createIcons();
-}
-
-// WebSocket Connection
+// WebSocket Telemetry Connection
 function connectWebSocket() {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const wsUrl = `${protocol}//${window.location.host}/api/ws`;
@@ -122,7 +162,7 @@ function connectWebSocket() {
 
   ws.onclose = () => {
     wsIndicator.className = 'flex items-center gap-1.5 text-xs text-slate-500';
-    wsText.textContent = 'Reconnecting...';
+    wsText.textContent = 'Offline';
     setTimeout(connectWebSocket, 2000);
   };
 
@@ -134,74 +174,170 @@ function connectWebSocket() {
     try {
       const msg = JSON.parse(event.data);
       if (msg.type === 'status') {
-        updateJobState(msg.data);
+        updateJobStatus(msg.data);
       } else if (msg.type === 'log') {
         appendLog(msg.line);
         if (msg.progress) {
-          updateMetrics(msg.progress);
+          updateJobStatus(msg.progress);
         }
       }
     } catch (e) {
-      console.error('WS Parse Error', e);
+      console.error('WS message error:', e);
     }
   };
 }
 
-// Fetch Datasets
+// Update Job Status & Top KPI Strip
+function updateJobStatus(job) {
+  currentJobState = job.state;
+  statusText.textContent = job.state.toUpperCase();
+
+  // Reset Dot animations
+  statusDot.className = 'h-2 w-2 rounded-full';
+
+  switch (job.state) {
+    case 'running':
+      statusBadge.className = 'flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium border bg-amber-500/10 border-amber-500/30 text-amber-400';
+      statusDot.classList.add('bg-amber-400', 'status-running');
+      headerStopBtn.classList.remove('hidden');
+      startBtn.disabled = true;
+
+      // Start live streaming active submaps & trajectory if not already started
+      if (job.run_name && job.run_name !== currentRunName) {
+        startLiveTracking(job.run_name);
+      }
+      break;
+
+    case 'finalizing':
+      statusBadge.className = 'flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium border bg-purple-500/10 border-purple-500/30 text-purple-400';
+      statusDot.classList.add('bg-purple-400', 'status-running');
+      headerStopBtn.classList.remove('hidden');
+      break;
+
+    case 'completed':
+      statusBadge.className = 'flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium border bg-emerald-500/10 border-emerald-500/30 text-emerald-400';
+      statusDot.classList.add('bg-emerald-400');
+      headerStopBtn.classList.add('hidden');
+      startBtn.disabled = false;
+      startBtn.innerHTML = '<i data-lucide="play" class="w-3.5 h-3.5 fill-current"></i> Start SLAM Run';
+      if (window.lucide) lucide.createIcons();
+      stopLiveTracking(true);
+      fetchRuns();
+      break;
+
+    case 'stopped':
+    case 'failed':
+      statusBadge.className = 'flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium border bg-rose-500/10 border-rose-500/30 text-rose-400';
+      statusDot.classList.add('bg-rose-400');
+      headerStopBtn.classList.add('hidden');
+      startBtn.disabled = false;
+      startBtn.innerHTML = '<i data-lucide="play" class="w-3.5 h-3.5 fill-current"></i> Start SLAM Run';
+      if (window.lucide) lucide.createIcons();
+      stopLiveTracking(false);
+      fetchRuns();
+      break;
+
+    default: // idle
+      statusBadge.className = 'flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium border bg-slate-900 border-slate-800 text-slate-300';
+      statusDot.classList.add('bg-slate-500');
+      headerStopBtn.classList.add('hidden');
+      startBtn.disabled = false;
+      startBtn.innerHTML = '<i data-lucide="play" class="w-3.5 h-3.5 fill-current"></i> Start SLAM Run';
+      if (window.lucide) lucide.createIcons();
+      break;
+  }
+
+  // Update KPI counters
+  metricSpeed.textContent = job.speed ? `${job.speed.toFixed(1)}x` : '0.0x';
+  metricBagTime.textContent = job.bag_time ? `${job.bag_time.toFixed(1)}s` : '0.0s';
+  metricScans.textContent = job.scans || '0';
+  metricQueueOdom.textContent = job.queue_odom || '0';
+  metricQueueSub.textContent = job.queue_sub || '0';
+  metricQueueGlob.textContent = job.queue_glob || '0';
+}
+
+// Append Terminal Log
+function appendLog(line) {
+  const div = document.createElement('div');
+  div.className = 'log-line';
+
+  if (line.includes('[error]') || line.includes('critical') || line.includes('failed')) {
+    div.classList.add('log-err');
+  } else if (line.includes('[warning]')) {
+    div.classList.add('log-warn');
+  } else if (line.includes('[progress]')) {
+    div.classList.add('log-progress');
+  } else {
+    div.classList.add('log-info');
+  }
+
+  div.textContent = line;
+  logConsole.appendChild(div);
+  totalLogLines++;
+  updateLogCount();
+
+  if (autoScroll) {
+    logConsole.scrollTop = logConsole.scrollHeight;
+  }
+}
+
+function updateLogCount() {
+  logCount.textContent = `${totalLogLines} lines`;
+}
+
+// Fetch Available Datasets
 async function fetchDatasets() {
   try {
     const res = await fetch('/api/datasets');
     const datasets = await res.json();
     datasetSelect.innerHTML = '';
 
-    if (!datasets || datasets.length === 0) {
-      datasetSelect.innerHTML = '<option value="">No .mcap datasets found in /data</option>';
+    if (datasets.length === 0) {
+      datasetSelect.innerHTML = '<option value="">No MCAP datasets found in /data</option>';
       return;
     }
 
-    datasets.forEach(ds => {
+    datasets.forEach(d => {
       const opt = document.createElement('option');
-      opt.value = ds.path;
-      opt.textContent = `${ds.name} (${ds.size_human})`;
+      opt.value = d.path;
+      opt.textContent = `${d.name} (${d.size_human})`;
       datasetSelect.appendChild(opt);
     });
-
-    if (datasets.length > 0 && !runNameInput.value) {
-      const baseName = datasets[0].name.replace(/\.[^/.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_');
-      runNameInput.placeholder = `run_${baseName.substring(0, 16)}`;
-    }
   } catch (err) {
-    datasetSelect.innerHTML = '<option value="">Failed to fetch datasets</option>';
+    datasetSelect.innerHTML = '<option value="">Error scanning datasets</option>';
   }
 }
 
-// Fetch Historical Runs
+// Fetch Past Runs History
 async function fetchRuns() {
   try {
     const res = await fetch('/api/runs');
     const runs = await res.json();
     runsList.innerHTML = '';
+
+    // Update 3D Run Select Dropdown
+    const prevSelectVal = viewerRunSelect.value;
     viewerRunSelect.innerHTML = '<option value="">Select a run...</option>';
 
-    if (!runs || runs.length === 0) {
-      runsList.innerHTML = '<div class="text-xs text-slate-500 py-4 text-center">No completed runs found yet.</div>';
+    if (runs.length === 0) {
+      runsList.innerHTML = '<div class="text-xs text-slate-500 py-4 text-center">No past runs found in /data/glim_results</div>';
       return;
     }
 
     runs.forEach(run => {
-      // Add to viewer dropdown
+      // Add to 3D Dropdown
       const opt = document.createElement('option');
       opt.value = run.name;
       opt.textContent = `${run.name} (${run.submaps_count} submaps)`;
       viewerRunSelect.appendChild(opt);
 
-      // Add to list
+      // Add to Past Runs Modal
       const item = document.createElement('div');
-      item.className = 'bg-slate-950/70 border border-slate-800/80 rounded-lg p-3 hover:border-slate-700 transition flex items-center justify-between gap-3';
+      item.className = 'bg-slate-950/70 border border-slate-800/80 rounded-lg p-2.5 hover:border-slate-700 transition flex items-center justify-between gap-3 text-xs';
       item.innerHTML = `
         <div class="min-w-0">
-          <div class="text-xs font-semibold text-slate-200 truncate">${run.name}</div>
-          <div class="text-[11px] text-slate-400 flex items-center gap-2 mt-0.5">
+          <div class="font-semibold text-slate-200 truncate">${run.name}</div>
+          <div class="text-[11px] text-slate-400 flex items-center gap-1.5 mt-0.5">
             <span>${run.modified_at}</span>
             <span>•</span>
             <span class="text-blue-400 font-medium">${run.submaps_count} submaps</span>
@@ -209,13 +345,13 @@ async function fetchRuns() {
             <span>${run.size_human}</span>
           </div>
         </div>
-        <div class="flex items-center gap-1.5 shrink-0">
-          <button onclick="openRunIn3D('${run.name}')" class="p-1.5 bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 rounded text-xs flex items-center gap-1 transition" title="View 3D Submaps & Trajectory">
+        <div class="flex items-center gap-1 shrink-0">
+          <button onclick="openRunIn3D('${run.name}')" class="p-1.5 bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 rounded flex items-center gap-1 transition" title="View in 3D">
             <i data-lucide="box" class="w-3.5 h-3.5"></i>
             <span class="text-[11px] font-medium hidden sm:inline">3D</span>
           </button>
           ${run.has_traj_lidar ? `
-            <a href="/api/runs/${encodeURIComponent(run.name)}/trajectory?opt=true" download="${run.name}_traj_lidar.txt" class="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-xs flex items-center gap-1 transition" title="Download Optimized LiDAR Trajectory (TUM)">
+            <a href="/api/runs/${encodeURIComponent(run.name)}/trajectory?opt=true" download="${run.name}_traj_lidar.txt" class="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded flex items-center transition" title="Download Optimized LiDAR Trajectory (TUM)">
               <i data-lucide="download" class="w-3.5 h-3.5"></i>
             </a>` : ''}
         </div>
@@ -225,8 +361,9 @@ async function fetchRuns() {
 
     if (window.lucide) lucide.createIcons();
 
-    // Auto-select first run in viewer dropdown
-    if (runs.length > 0 && !currentRunName) {
+    if (prevSelectVal) {
+      viewerRunSelect.value = prevSelectVal;
+    } else if (runs.length > 0 && !currentRunName) {
       viewerRunSelect.value = runs[0].name;
     }
   } catch (err) {
@@ -236,8 +373,8 @@ async function fetchRuns() {
 
 // Open run directly in 3D
 window.openRunIn3D = function(runName) {
+  runsModal.classList.add('hidden');
   viewerRunSelect.value = runName;
-  switchTab('3d');
   loadMapRun(runName);
 };
 
@@ -246,7 +383,7 @@ async function handleStartJob(e) {
   e.preventDefault();
   const datasetPath = datasetSelect.value;
   if (!datasetPath) {
-    alert('Please select a dataset.');
+    alert('Please select an input MCAP dataset.');
     return;
   }
 
@@ -273,158 +410,82 @@ async function handleStartJob(e) {
       throw new Error(err.detail || 'Failed to start job');
     }
     const job = await res.json();
-    updateJobState(job);
-    switchTab('console');
+
+    // Auto-close launcher & open console for visibility
+    launcherModal.classList.add('hidden');
+    consoleDrawer.classList.remove('hidden');
+    minConsoleBtn.classList.add('hidden');
+
+    updateJobStatus(job);
+    startLiveTracking(job.run_name);
   } catch (err) {
-    alert(err.message);
+    alert(`Could not start job: ${err.message}`);
     startBtn.disabled = false;
-    startBtn.innerHTML = '<i data-lucide="play" class="w-3.5 h-3.5 fill-current"></i> Start SLAM Run';
-    if (window.lucide) lucide.createIcons();
+    startBtn.textContent = 'Start SLAM Run';
   }
 }
 
 // Stop SLAM Job
 async function handleStopJob() {
-  if (!confirm('Stop current SLAM run? Final submaps and trajectory will be flushed to disk.')) {
-    return;
-  }
-  stopBtn.disabled = true;
-  stopBtn.textContent = 'Finalizing...';
+  if (!confirm('Are you sure you want to stop and finalize the current SLAM run?')) return;
+  headerStopBtn.disabled = true;
+  headerStopBtn.textContent = 'Finalizing...';
+
   try {
-    await fetch('/api/jobs/stop', { method: 'POST' });
+    const res = await fetch('/api/jobs/stop', { method: 'POST' });
+    const job = await res.json();
+    updateJobStatus(job);
   } catch (err) {
-    alert('Error stopping job: ' + err.message);
-    stopBtn.disabled = false;
+    alert(`Error stopping job: ${err.message}`);
+  } finally {
+    headerStopBtn.disabled = false;
   }
 }
 
-// Update Job State UI
-function updateJobState(job) {
-  isJobRunning = job.state === 'running' || job.state === 'finalizing';
+// ============================================================================
+// REAL-TIME 3D VIEWPORT & SUBMAP STREAMING (Three.js)
+// ============================================================================
 
-  if (job.state === 'running') {
-    statusBadge.className = 'flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium border bg-blue-900/30 border-blue-700/50 text-blue-300';
-    statusDot.className = 'h-2 w-2 rounded-full bg-blue-400 status-running';
-    statusText.textContent = `Running: ${job.run_name || ''}`;
-    startBtn.classList.add('hidden');
-    stopBtn.classList.remove('hidden');
-    stopBtn.disabled = false;
-    stopBtn.innerHTML = '<i data-lucide="square" class="w-3.5 h-3.5 fill-current"></i> Stop & Finalize';
-  } else if (job.state === 'finalizing') {
-    statusBadge.className = 'flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium border bg-amber-900/30 border-amber-700/50 text-amber-300';
-    statusDot.className = 'h-2 w-2 rounded-full bg-amber-400 status-running';
-    statusText.textContent = 'Finalizing & Saving Map...';
-    stopBtn.disabled = true;
-    stopBtn.textContent = 'Saving...';
-  } else if (job.state === 'completed' || job.state === 'stopped') {
-    statusBadge.className = 'flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium border bg-emerald-900/30 border-emerald-700/50 text-emerald-300';
-    statusDot.className = 'h-2 w-2 rounded-full bg-emerald-400';
-    statusText.textContent = job.state === 'completed' ? 'Completed' : 'Stopped & Saved';
-    startBtn.classList.remove('hidden');
-    startBtn.disabled = false;
-    startBtn.innerHTML = '<i data-lucide="play" class="w-3.5 h-3.5 fill-current"></i> Start SLAM Run';
-    stopBtn.classList.add('hidden');
-    fetchRuns();
-  } else if (job.state === 'failed') {
-    statusBadge.className = 'flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium border bg-rose-900/30 border-rose-700/50 text-rose-300';
-    statusDot.className = 'h-2 w-2 rounded-full bg-rose-500';
-    statusText.textContent = 'Failed';
-    startBtn.classList.remove('hidden');
-    startBtn.disabled = false;
-    startBtn.innerHTML = '<i data-lucide="play" class="w-3.5 h-3.5 fill-current"></i> Start SLAM Run';
-    stopBtn.classList.add('hidden');
-    fetchRuns();
-  } else {
-    statusBadge.className = 'flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium border bg-slate-800/80 border-slate-700 text-slate-300';
-    statusDot.className = 'h-2 w-2 rounded-full bg-slate-500';
-    statusText.textContent = 'Idle';
-    startBtn.classList.remove('hidden');
-    startBtn.disabled = false;
-    startBtn.innerHTML = '<i data-lucide="play" class="w-3.5 h-3.5 fill-current"></i> Start SLAM Run';
-    stopBtn.classList.add('hidden');
-  }
+function initThreeJS() {
+  const container = viewportContainer;
+  const width = window.innerWidth;
+  const height = window.innerHeight;
 
-  updateMetrics(job);
-  if (window.lucide) lucide.createIcons();
-}
-
-// Update Metrics Display
-function updateMetrics(job) {
-  if (!job) return;
-  metricBagTime.textContent = (job.bag_time || 0).toFixed(1) + 's';
-  metricSpeed.textContent = (job.speed || 0).toFixed(2) + 'x';
-  metricScans.textContent = (job.scans || 0).toLocaleString();
-  metricElapsed.textContent = (job.elapsed_sec || 0).toFixed(1) + 's';
-
-  metricQueueOdom.textContent = job.odom_queue || 0;
-  metricQueueSub.textContent = job.sub_queue || 0;
-  metricQueueGlob.textContent = job.glob_queue || 0;
-}
-
-// Append Log Line
-function appendLog(line) {
-  const div = document.createElement('div');
-  div.className = 'log-line';
-
-  if (line.includes('[error]') || line.includes('[critical]')) {
-    div.classList.add('log-err');
-  } else if (line.includes('[warning]') || line.includes('[warn]')) {
-    div.classList.add('log-warn');
-  } else if (line.includes('[progress]')) {
-    div.classList.add('log-progress');
-  } else {
-    div.classList.add('log-info');
-  }
-
-  div.textContent = line;
-  logConsole.appendChild(div);
-
-  if (autoScroll) {
-    logConsole.scrollTop = logConsole.scrollHeight;
-  }
-}
-
-// =============================================================================
-// Three.js 3D WebGL Viewer & Submap Isolation
-// =============================================================================
-
-function initThreeScene() {
-  if (threeRenderer) return;
-
-  const width = viewportContainer.clientWidth;
-  const height = viewportContainer.clientHeight;
-
+  // Scene
   threeScene = new THREE.Scene();
-  threeScene.background = new THREE.Color(0x020617); // Slate 950
+  threeScene.background = new THREE.Color(0x020617); // Slate-950
 
-  threeCamera = new THREE.PerspectiveCamera(55, width / height, 0.1, 10000);
-  threeCamera.position.set(0, -30, 40);
-  threeCamera.up.set(0, 0, 1); // Z-up for LiDAR/SLAM coordinates!
+  // Camera (Z-Up for SLAM / Robotics convention)
+  threeCamera = new THREE.PerspectiveCamera(55, width / height, 0.1, 5000);
+  threeCamera.up.set(0, 0, 1);
+  threeCamera.position.set(-25, -25, 20);
 
-  threeRenderer = new THREE.WebGLRenderer({ antialias: true });
+  // Renderer
+  threeRenderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
   threeRenderer.setSize(width, height);
   threeRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  container.appendChild(threeRenderer.domElement);
 
-  viewportContainer.innerHTML = '';
-  viewportContainer.appendChild(threeRenderer.domElement);
-  viewportContainer.appendChild(viewerHud);
-
+  // OrbitControls
   threeControls = new THREE.OrbitControls(threeCamera, threeRenderer.domElement);
   threeControls.enableDamping = true;
   threeControls.dampingFactor = 0.08;
   threeControls.screenSpacePanning = true;
+  threeControls.target.set(0, 0, 0);
 
-  // Grid
-  threeGrid = new THREE.GridHelper(200, 40, 0x334155, 0x1e293b);
-  threeGrid.rotation.x = Math.PI / 2; // Orient grid to XY ground plane with Z-up
-  threeScene.add(threeGrid);
+  // Grid Helper (aligned with Z-up)
+  const grid = new THREE.GridHelper(200, 40, 0x1e293b, 0x0f172a);
+  grid.rotation.x = Math.PI / 2;
+  threeScene.add(grid);
 
-  // Lights
-  const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
-  threeScene.add(ambientLight);
+  // Axes Helper (X: Red, Y: Green, Z: Blue)
+  const axes = new THREE.AxesHelper(3.0);
+  threeScene.add(axes);
 
-  window.addEventListener('resize', onViewportResize);
+  // Window Resize Listener
+  window.addEventListener('resize', onWindowResize);
 
+  // Animation Loop
   function animate() {
     requestAnimationFrame(animate);
     threeControls.update();
@@ -433,21 +494,20 @@ function initThreeScene() {
   animate();
 }
 
-function onViewportResize() {
-  if (!threeRenderer || !viewportContainer) return;
-  const width = viewportContainer.clientWidth;
-  const height = viewportContainer.clientHeight;
-  if (width === 0 || height === 0) return;
-  threeCamera.aspect = width / height;
+function onWindowResize() {
+  if (!threeCamera || !threeRenderer) return;
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  threeCamera.aspect = w / h;
   threeCamera.updateProjectionMatrix();
-  threeRenderer.setSize(width, height);
+  threeRenderer.setSize(w, h);
 }
 
+// 3D HUD Controls Setup
 function setup3DViewerControls() {
-  viewerIsolateToggle.checked = true;
   viewerLoadBtn.addEventListener('click', () => {
-    const run = viewerRunSelect.value;
-    if (run) loadMapRun(run);
+    const runName = viewerRunSelect.value;
+    if (runName) loadMapRun(runName);
   });
 
   viewerIsolateToggle.addEventListener('change', (e) => {
@@ -455,150 +515,156 @@ function setup3DViewerControls() {
     updateSubmapVisibility();
   });
 
+  viewerSubmapSlider.addEventListener('input', (e) => {
+    activeSubmapId = parseInt(e.target.value, 10);
+    onActiveSubmapChanged(activeSubmapId);
+  });
+
   viewerPrevBtn.addEventListener('click', () => {
     if (activeSubmapId > 0) {
-      setSubmap(activeSubmapId - 1);
+      activeSubmapId--;
+      viewerSubmapSlider.value = activeSubmapId;
+      onActiveSubmapChanged(activeSubmapId);
     }
   });
 
   viewerNextBtn.addEventListener('click', () => {
     if (activeSubmapId < currentRunSubmaps.length - 1) {
-      setSubmap(activeSubmapId + 1);
+      activeSubmapId++;
+      viewerSubmapSlider.value = activeSubmapId;
+      onActiveSubmapChanged(activeSubmapId);
     }
   });
 
-  viewerSubmapSlider.addEventListener('input', (e) => {
-    setSubmap(parseInt(e.target.value, 10));
-  });
-
   viewerFocusBtn.addEventListener('click', () => {
-    focusCameraOnSubmap(activeSubmapId);
-  });
-
-  viewerPointSize.addEventListener('input', (e) => {
-    pointSize = parseFloat(e.target.value);
-    submapCache.forEach(points => {
-      points.material.size = pointSize;
-    });
+    if (activeSubmapId !== null) {
+      focusCameraOnSubmap(activeSubmapId);
+    }
   });
 
   viewerColorMode.addEventListener('change', (e) => {
     colorMode = e.target.value;
-    // Re-apply colors to cached submaps
     submapCache.forEach((points, id) => {
       applySubmapColors(points.geometry, id);
     });
   });
+
+  viewerPointSize.addEventListener('input', (e) => {
+    pointSize = parseFloat(e.target.value);
+    submapCache.forEach((points) => {
+      points.material.size = pointSize;
+    });
+  });
 }
 
-// Load Full Map Run
-async function loadMapRun(runName) {
-  initThreeScene();
-  currentRunName = runName;
-  viewerHud.classList.remove('hidden');
-  hudSubmapText.textContent = `Loading ${runName} metadata...`;
-
-  // 1. Clear previous submaps & trajectory
-  submapCache.forEach(p => threeScene.remove(p));
+// Clear Scene Between Runs
+function clear3DScene() {
+  submapCache.forEach((points) => {
+    threeScene.remove(points);
+    if (points.geometry) points.geometry.dispose();
+    if (points.material) points.material.dispose();
+  });
   submapCache.clear();
-  if (trajLine) {
-    threeScene.remove(trajLine);
-    trajLine = null;
-  }
-  if (submapMarkers) {
-    threeScene.remove(submapMarkers);
-    submapMarkers = null;
+
+  if (threeTrajectoryLine) {
+    threeScene.remove(threeTrajectoryLine);
+    if (threeTrajectoryLine.geometry) threeTrajectoryLine.geometry.dispose();
+    if (threeTrajectoryLine.material) threeTrajectoryLine.material.dispose();
+    threeTrajectoryLine = null;
   }
 
-  // 2. Load Trajectory (Binary)
+  currentRunSubmaps = [];
+  activeSubmapId = null;
+  viewerSubmapSlider.max = 0;
+  viewerSubmapSlider.value = 0;
+  viewerHud.classList.add('hidden');
+}
+
+// Load a Completed or Past Run
+async function loadMapRun(runName) {
+  if (!runName) return;
+  currentRunName = runName;
+  viewportPlaceholder.classList.add('hidden');
+  clear3DScene();
+
+  viewerLoadBtn.disabled = true;
+  viewerLoadBtn.textContent = 'Loading...';
+
   try {
-    const trajRes = await fetch(`/api/runs/${encodeURIComponent(runName)}/trajectory_binary?opt=true`);
-    if (trajRes.ok) {
-      const buffer = await trajRes.arrayBuffer();
-      const coords = new Float32Array(buffer);
-      const trajGeom = new THREE.BufferGeometry();
-      trajGeom.setAttribute('position', new THREE.BufferAttribute(coords, 3));
-      const trajMat = new THREE.LineBasicMaterial({ color: 0x38bdf8, linewidth: 2 });
-      trajLine = new THREE.Line(trajGeom, trajMat);
-      threeScene.add(trajLine);
+    // 1. Fetch Trajectory Binary
+    await loadTrajectory(runName, true);
+
+    // 2. Fetch Submaps Metadata
+    const res = await fetch(`/api/runs/${encodeURIComponent(runName)}/submaps`);
+    if (!res.ok) throw new Error('Failed to load submap list');
+    currentRunSubmaps = await res.json();
+
+    if (currentRunSubmaps.length === 0) {
+      hudSubmapText.textContent = 'No submaps recorded';
+      viewerHud.classList.remove('hidden');
+      return;
+    }
+
+    viewerSubmapSlider.max = currentRunSubmaps.length - 1;
+    activeSubmapId = 0;
+    viewerSubmapSlider.value = 0;
+    viewerHud.classList.remove('hidden');
+
+    // 3. Load First Batch of Submaps
+    const initialBatch = currentRunSubmaps.slice(0, 30);
+    await Promise.all(initialBatch.map(sm => loadSubmapPoints(runName, sm.id)));
+
+    onActiveSubmapChanged(0);
+    focusCameraOnSubmap(0);
+
+    // Stream remaining submaps in background
+    if (currentRunSubmaps.length > 30) {
+      streamRemainingSubmaps(runName, 30);
     }
   } catch (err) {
-    console.warn('Could not load trajectory binary', err);
-  }
-
-  // 3. Load Submap Metadata
-  try {
-    const subRes = await fetch(`/api/runs/${encodeURIComponent(runName)}/submaps`);
-    if (!subRes.ok) throw new Error('Failed to load submaps');
-    currentRunSubmaps = await subRes.json();
-
-    if (currentRunSubmaps.length > 0) {
-      viewerSubmapSlider.min = 0;
-      viewerSubmapSlider.max = currentRunSubmaps.length - 1;
-      viewerSubmapSlider.value = 0;
-
-      // Render Submap Centers as markers
-      const markerCoords = new Float32Array(currentRunSubmaps.length * 3);
-      currentRunSubmaps.forEach((sm, i) => {
-        markerCoords[i * 3] = sm.pos[0];
-        markerCoords[i * 3 + 1] = sm.pos[1];
-        markerCoords[i * 3 + 2] = sm.pos[2];
-      });
-      const markerGeom = new THREE.BufferGeometry();
-      markerGeom.setAttribute('position', new THREE.BufferAttribute(markerCoords, 3));
-      const markerMat = new THREE.PointsMaterial({ color: 0xf43f5e, size: 5.0, sizeAttenuation: false });
-      submapMarkers = new THREE.Points(markerGeom, markerMat);
-      threeScene.add(submapMarkers);
-
-      // Load initial submap & focus camera
-      setSubmap(0, /*autoFocus=*/true);
-    }
-  } catch (err) {
-    hudSubmapText.textContent = `Error loading submaps: ${err.message}`;
+    console.error('Failed to load map run:', err);
+    alert(`Could not load map: ${err.message}`);
+  } finally {
+    viewerLoadBtn.disabled = false;
+    viewerLoadBtn.textContent = 'Load';
   }
 }
 
-// Select Active Submap
-async function setSubmap(submapId, autoFocus = false) {
-  if (submapId < 0 || submapId >= currentRunSubmaps.length) return;
-  activeSubmapId = submapId;
-  viewerSubmapSlider.value = submapId;
-
-  const sm = currentRunSubmaps[submapId];
-  hudSubmapText.textContent = `Submap #${sm.id} / ${currentRunSubmaps.length - 1} | Points: ${(sm.num_points || 0).toLocaleString()} | Pos: (${sm.pos[0].toFixed(1)}, ${sm.pos[1].toFixed(1)}, ${sm.pos[2].toFixed(1)})`;
-
-  // Load points for this submap if not yet cached
-  await loadSubmapPoints(submapId);
-  updateSubmapVisibility();
-
-  if (autoFocus) {
-    focusCameraOnSubmap(submapId);
+// Background Submap Streaming
+async function streamRemainingSubmaps(runName, startIndex) {
+  const chunkSize = 15;
+  for (let i = startIndex; i < currentRunSubmaps.length; i += chunkSize) {
+    if (currentRunName !== runName) break;
+    const chunk = currentRunSubmaps.slice(i, i + chunkSize);
+    await Promise.all(chunk.map(sm => loadSubmapPoints(runName, sm.id)));
+    await new Promise(r => setTimeout(r, 40));
   }
 }
 
-// Load Submap Points (Binary Float32Array)
-async function loadSubmapPoints(submapId) {
-  if (submapCache.has(submapId)) return submapCache.get(submapId);
+// Load Binary Submap Point Cloud (Zero deserialization overhead)
+async function loadSubmapPoints(runName, submapId) {
+  if (submapCache.has(submapId)) {
+    return submapCache.get(submapId);
+  }
 
-  const sm = currentRunSubmaps[submapId];
+  const sm = currentRunSubmaps.find(s => s.id === submapId);
   if (!sm) return null;
 
   try {
-    const res = await fetch(`/api/runs/${encodeURIComponent(currentRunName)}/submaps/${submapId}/points`);
+    const res = await fetch(`/api/runs/${encodeURIComponent(runName)}/submaps/${submapId}/points`);
     if (!res.ok) return null;
-
     const buffer = await res.arrayBuffer();
-    const positions = new Float32Array(buffer);
 
+    const positions = new Float32Array(buffer);
     const geom = new THREE.BufferGeometry();
     geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
 
-    // Apply 4x4 matrix from GLIM
+    // Apply submap origin transformation matrix
     const matrix = new THREE.Matrix4();
     matrix.fromArray(sm.matrix);
     geom.applyMatrix4(matrix);
 
-    // Compute Altitude Rainbow Colors
+    // Apply Altitude Rainbow Colors
     applySubmapColors(geom, submapId);
 
     const mat = new THREE.PointsMaterial({
@@ -610,10 +676,38 @@ async function loadSubmapPoints(submapId) {
     const pointsObj = new THREE.Points(geom, mat);
     threeScene.add(pointsObj);
     submapCache.set(submapId, pointsObj);
+
+    if (isIsolated) {
+      pointsObj.visible = (submapId === activeSubmapId);
+    }
+
     return pointsObj;
   } catch (err) {
-    console.error(`Failed to load submap ${submapId} points:`, err);
     return null;
+  }
+}
+
+// Load Binary Trajectory
+async function loadTrajectory(runName, opt = true) {
+  try {
+    const res = await fetch(`/api/runs/${encodeURIComponent(runName)}/trajectory_binary?opt=${opt}`);
+    if (!res.ok) return;
+    const buffer = await res.arrayBuffer();
+    const positions = new Float32Array(buffer);
+
+    if (threeTrajectoryLine) {
+      threeTrajectoryLine.geometry.dispose();
+      threeTrajectoryLine.geometry = new THREE.BufferGeometry();
+      threeTrajectoryLine.geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    } else {
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      const mat = new THREE.LineBasicMaterial({ color: 0x38bdf8, linewidth: 2 });
+      threeTrajectoryLine = new THREE.Line(geom, mat);
+      threeScene.add(threeTrajectoryLine);
+    }
+  } catch (err) {
+    console.warn('Trajectory fetch failed:', err);
   }
 }
 
@@ -633,11 +727,10 @@ function applySubmapColors(geom, submapId) {
 
   for (let i = 0; i < count; i++) {
     if (colorMode === 'flat') {
-      colors[i * 3] = 0.9;
-      colors[i * 3 + 1] = 0.9;
-      colors[i * 3 + 2] = 0.9;
+      colors[i * 3] = 0.92;
+      colors[i * 3 + 1] = 0.92;
+      colors[i * 3 + 2] = 0.92;
     } else {
-      // Rainbow based on normalized Z
       const t = (pos.getZ(i) - minZ) / rangeZ;
       const rgb = turboColormap(t);
       colors[i * 3] = rgb[0];
@@ -650,15 +743,30 @@ function applySubmapColors(geom, submapId) {
   geom.attributes.color.needsUpdate = true;
 }
 
-// Simple Turbo / Rainbow colormap
 function turboColormap(t) {
   const r = Math.sin(t * Math.PI * 1.5);
   const g = Math.sin(t * Math.PI);
   const b = Math.cos(t * Math.PI * 1.5);
-  return [Math.max(0, Math.min(1, r * 0.8 + 0.2)), Math.max(0, Math.min(1, g)), Math.max(0, Math.min(1, b * 0.9 + 0.1))];
+  return [
+    Math.max(0, Math.min(1, r * 0.8 + 0.2)),
+    Math.max(0, Math.min(1, g)),
+    Math.max(0, Math.min(1, b * 0.9 + 0.1))
+  ];
 }
 
-// Update Submap Visibility based on Isolation Toggle
+// Active Submap Selection Changed
+function onActiveSubmapChanged(submapId) {
+  const sm = currentRunSubmaps.find(s => s.id === submapId);
+  if (sm) {
+    hudSubmapText.textContent = `Submap #${String(submapId).padStart(4, '0')} (${sm.num_points.toLocaleString()} pts)`;
+  } else {
+    hudSubmapText.textContent = `Submap #${submapId}`;
+  }
+  updateSubmapVisibility();
+  loadSubmapPoints(currentRunName, submapId);
+}
+
+// Update Submap Visibility for Isolation Mode
 function updateSubmapVisibility() {
   submapCache.forEach((points, id) => {
     if (isIsolated) {
@@ -669,13 +777,83 @@ function updateSubmapVisibility() {
   });
 }
 
-// Focus Camera smoothly on a Submap
+// Focus Camera smoothly on Submap Position
 function focusCameraOnSubmap(submapId) {
-  const sm = currentRunSubmaps[submapId];
+  const sm = currentRunSubmaps.find(s => s.id === submapId);
   if (!sm || !threeControls) return;
 
   const targetPos = new THREE.Vector3(sm.pos[0], sm.pos[1], sm.pos[2]);
   threeControls.target.copy(targetPos);
-  threeCamera.position.set(sm.pos[0] - 15, sm.pos[1] - 15, sm.pos[2] + 12);
+  threeCamera.position.set(sm.pos[0] - 18, sm.pos[1] - 18, sm.pos[2] + 14);
   threeControls.update();
+}
+
+// ============================================================================
+// STRETCH GOAL: LIVE STREAMING SUBMAPS & TRAJECTORY DURING REPLAY
+// ============================================================================
+
+function startLiveTracking(runName) {
+  stopLiveTracking(false);
+  currentRunName = runName;
+  viewportPlaceholder.classList.add('hidden');
+  viewerHud.classList.remove('hidden');
+
+  let knownSubmapCount = 0;
+
+  async function pollLiveRun() {
+    if (currentJobState !== 'running' && currentJobState !== 'finalizing') {
+      stopLiveTracking(true);
+      return;
+    }
+
+    try {
+      // 1. Poll Trajectory live
+      await loadTrajectory(runName, false);
+
+      // 2. Poll Submaps list live
+      const res = await fetch(`/api/runs/${encodeURIComponent(runName)}/submaps`);
+      if (res.ok) {
+        const submaps = await res.json();
+        currentRunSubmaps = submaps;
+
+        if (submaps.length > knownSubmapCount) {
+          viewerSubmapSlider.max = Math.max(0, submaps.length - 1);
+
+          // Ingest new submaps
+          for (let i = knownSubmapCount; i < submaps.length; i++) {
+            await loadSubmapPoints(runName, submaps[i].id);
+          }
+
+          // Follow the latest submap if camera is at origin
+          const latestId = submaps[submaps.length - 1].id;
+          if (activeSubmapId === null || knownSubmapCount === 0) {
+            activeSubmapId = latestId;
+            viewerSubmapSlider.value = latestId;
+            focusCameraOnSubmap(latestId);
+          }
+          hudSubmapText.textContent = `Live Submap #${latestId} (${submaps.length} total)`;
+          knownSubmapCount = submaps.length;
+        }
+      }
+    } catch (e) {
+      console.warn('Live tracking poll error:', e);
+    }
+  }
+
+  // Poll every 1.5 seconds while job runs
+  pollLiveRun();
+  liveStreamTimer = setInterval(pollLiveRun, 1500);
+}
+
+function stopLiveTracking(loadFinalOptimized = true) {
+  if (liveStreamTimer) {
+    clearInterval(liveStreamTimer);
+    liveStreamTimer = null;
+  }
+  if (loadFinalOptimized && currentRunName) {
+    // Reload final loop-closed trajectory and submap poses
+    setTimeout(() => {
+      loadMapRun(currentRunName);
+    }, 1000);
+  }
 }
