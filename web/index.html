@@ -305,8 +305,15 @@
 
       <div class="h-4 w-px bg-slate-800"></div>
 
-      <!-- Visibility Layers (Trajectory & Loop Closures) -->
+      <!-- Visibility Layers (Map, Trajectory & Loop Closures) -->
       <div class="flex items-center gap-2">
+        <label class="flex items-center gap-1.5 cursor-pointer font-medium text-slate-300 select-none" title="Toggle Point Cloud Map (M)">
+          <input type="checkbox" id="viewer-map-toggle" checked class="rounded border-slate-700 bg-slate-900 text-purple-500 focus:ring-0">
+          <span class="flex items-center gap-1">
+            <span class="w-2 h-2 rounded-full bg-purple-400"></span>
+            <span>Map</span>
+          </span>
+        </label>
         <label class="flex items-center gap-1.5 cursor-pointer font-medium text-slate-300 select-none" title="Toggle Trajectory Line (O)">
           <input type="checkbox" id="viewer-traj-toggle" checked class="rounded border-slate-700 bg-slate-900 text-sky-500 focus:ring-0">
           <span class="flex items-center gap-1">
