@@ -25,7 +25,10 @@ GLIM Options (passed to glim_mcap):
   -r, --rate <float>    Playback rate multiplier (1.0 = real-time, 0 = max speed)
   --lidar <topic>       LiDAR topic (default: /ouster/points)
   --imu <topic>         IMU topic (default: /ouster/imu)
+  --no-imu              Run without IMU (uses continuous-time CT-ICP odometry)
+  --scale <float>       Coordinate scale factor (e.g. 0.01 for cm to m)
   --cpu                 Use CPU-only odometry and mapping
+  --odom-only           Run front-end odometry only (disable sub-mapping and global mapping)
   --headless            Run without visualizer GUI (default if --gui is omitted)
 
 Examples:

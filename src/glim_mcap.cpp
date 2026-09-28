@@ -148,6 +148,9 @@ void print_usage(const char* prog) {
             << "  -r, --rate <float>       Playback speed multiplier (e.g. 1.0 = real-time, 0 = unlimited max speed)\n"
             << "  --lidar <topic>          LiDAR topic name (default: /ouster/points)\n"
             << "  --imu <topic>            IMU topic name (default: /ouster/imu)\n"
+            << "  --no-imu                 Run without IMU (uses continuous-time CT-ICP odometry)\n"
+            << "  --scale <float>          Coordinate scale factor (e.g. 0.01 for cm to m)\n"
+            << "  --odom-only              Run odometry front-end only (disable submapping and global mapping)\n"
             << "  --cpu                    Use CPU-only estimation and mapping (default: GPU)\n"
             << "  --headless               Run without visualizer GUI\n"
             << "  -h, --help               Display this help\n";
@@ -164,8 +167,11 @@ int main(int argc, char** argv) {
   double max_duration = 0.0;
   double start_offset = 0.0;
   double playback_rate = 0.0;
+  double point_scale = -1.0;
   bool headless = false;
   bool use_cpu = false;
+  bool odom_only = false;
+  bool no_imu = false;
 
   for (int i = 1; i < argc; ++i) {
     std::string arg = argv[i];
@@ -188,10 +194,16 @@ int main(int argc, char** argv) {
       lidar_topic = argv[++i];
     } else if (arg == "--imu" && i + 1 < argc) {
       imu_topic = argv[++i];
+    } else if (arg == "--no-imu" || arg == "--without-imu") {
+      no_imu = true;
+    } else if (arg == "--scale" && i + 1 < argc) {
+      point_scale = std::stod(argv[++i]);
     } else if (arg == "--headless") {
       headless = true;
     } else if (arg == "--cpu") {
       use_cpu = true;
+    } else if (arg == "--odom-only" || arg == "--odometry-only") {
+      odom_only = true;
     } else if (arg[0] != '-' && input_mcap.empty()) {
       input_mcap = arg;
     } else {
@@ -215,14 +227,50 @@ int main(int argc, char** argv) {
   auto console_logger = spdlog::stdout_color_mt("glim");
   spdlog::set_default_logger(console_logger);
   spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%^%l%$] %v");
-  spdlog::info("GLIM Standalone MCAP Runner starting... ({})", use_cpu ? "CPU mode" : "GPU mode");
+
+  // Open MCAP reader early for topic discovery
+  spdlog::info("Scanning MCAP reader on: {}", input_mcap);
+  std::unique_ptr<aimcap::Reader> reader;
+  try {
+    reader = std::make_unique<aimcap::Reader>(input_mcap, /*add_column_timestamps=*/true);
+    g_active_reader = reader.get();
+  } catch (const std::exception& e) {
+    spdlog::critical("Failed to open MCAP file: {}", e.what());
+    return 1;
+  }
+
+  // Topic auto-detection
+  const auto& available_topics = reader->Topics();
+  if (available_topics.count(lidar_topic) == 0) {
+    if (available_topics.count("/lidar_logs") > 0) {
+      spdlog::warn("LiDAR topic '{}' not found in MCAP. Found '/lidar_logs'; auto-switching.", lidar_topic);
+      lidar_topic = "/lidar_logs";
+    }
+  }
+  if (!no_imu && available_topics.count(imu_topic) == 0) {
+    spdlog::warn("IMU topic '{}' not found in MCAP. Automatically falling back to Continuous-Time (CT) IMU-less mode.", imu_topic);
+    no_imu = true;
+  }
+
+  spdlog::info("GLIM Standalone MCAP Runner starting... ({} | {} | LiDAR: {})",
+               no_imu ? "CT IMU-less mode" : (use_cpu ? "CPU mode" : "GPU mode"),
+               odom_only ? "Odometry-only" : "Full SLAM",
+               lidar_topic);
   spdlog::info("Input MCAP: {}", input_mcap);
   spdlog::info("Config path: {}", config_path);
   spdlog::info("Output dir: {}", output_dir);
 
   // Initialize GLIM GlobalConfig
   auto global_config = glim::GlobalConfig::instance(config_path);
-  if (use_cpu) {
+  if (no_imu) {
+    global_config->override_param("global", "config_odometry", std::string("config_odometry_ct.json"));
+    if (use_cpu) {
+      global_config->override_param("global", "config_sub_mapping", std::string("config_no_imu_cpu.json"));
+      global_config->override_param("global", "config_global_mapping", std::string("config_global_mapping_cpu.json"));
+    } else {
+      global_config->override_param("global", "config_sub_mapping", std::string("config_no_imu.json"));
+    }
+  } else if (use_cpu) {
     global_config->override_param("global", "config_odometry", std::string("config_odometry_cpu.json"));
     global_config->override_param("global", "config_sub_mapping", std::string("config_sub_mapping_cpu.json"));
     std::string current_global = global_config->param<std::string>("global", "config_global_mapping", "");
@@ -244,12 +292,13 @@ int main(int argc, char** argv) {
 
   // Load Odometry module
   glim::Config config_odometry(glim::GlobalConfig::get_config_path("config_odometry"));
-  std::string odom_so = config_odometry.param<std::string>("odometry_estimation", "so_name", use_cpu ? "libodometry_estimation_cpu.so" : "libodometry_estimation_gpu.so");
+  std::string default_odom = no_imu ? "libodometry_estimation_ct.so" : (use_cpu ? "libodometry_estimation_cpu.so" : "libodometry_estimation_gpu.so");
+  std::string odom_so = config_odometry.param<std::string>("odometry_estimation", "so_name", default_odom);
   spdlog::info("Loading odometry module: {}", odom_so);
   auto odom = glim::OdometryEstimationBase::load_module(odom_so);
   if (!odom) {
     spdlog::warn("Failed to load {}, falling back to CPU odometry", odom_so);
-    odom = glim::OdometryEstimationBase::load_module("libodometry_estimation_cpu.so");
+    odom = glim::OdometryEstimationBase::load_module(no_imu ? "libodometry_estimation_ct.so" : "libodometry_estimation_cpu.so");
   }
   if (!odom) {
     spdlog::critical("Could not load any odometry estimation module!");
@@ -257,28 +306,31 @@ int main(int argc, char** argv) {
   }
   auto odometry_estimation = std::make_shared<glim::AsyncOdometryEstimation>(odom, odom->requires_imu());
 
-  // Load SubMapping module
+  // Load SubMapping and GlobalMapping modules (skipped in odom_only mode)
   std::shared_ptr<glim::AsyncSubMapping> sub_mapping;
-  std::string sub_so = glim::Config(glim::GlobalConfig::get_config_path("config_sub_mapping"))
-                           .param<std::string>("sub_mapping", "so_name", "libsub_mapping.so");
-  if (!sub_so.empty()) {
-    spdlog::info("Loading sub-mapping module: {}", sub_so);
-    auto sub = glim::SubMappingBase::load_module(sub_so);
-    if (sub) {
-      sub_mapping = std::make_shared<glim::AsyncSubMapping>(sub);
-    }
-  }
-
-  // Load GlobalMapping module
   std::shared_ptr<glim::AsyncGlobalMapping> global_mapping;
-  std::string global_so = glim::Config(glim::GlobalConfig::get_config_path("config_global_mapping"))
-                              .param<std::string>("global_mapping", "so_name", "libglobal_mapping.so");
-  if (!global_so.empty()) {
-    spdlog::info("Loading global mapping module: {}", global_so);
-    auto global = glim::GlobalMappingBase::load_module(global_so);
-    if (global) {
-      global_mapping = std::make_shared<glim::AsyncGlobalMapping>(global);
+  if (!odom_only) {
+    std::string sub_so = glim::Config(glim::GlobalConfig::get_config_path("config_sub_mapping"))
+                             .param<std::string>("sub_mapping", "so_name", "libsub_mapping.so");
+    if (!sub_so.empty()) {
+      spdlog::info("Loading sub-mapping module: {}", sub_so);
+      auto sub = glim::SubMappingBase::load_module(sub_so);
+      if (sub) {
+        sub_mapping = std::make_shared<glim::AsyncSubMapping>(sub);
+      }
     }
+
+    std::string global_so = glim::Config(glim::GlobalConfig::get_config_path("config_global_mapping"))
+                                .param<std::string>("global_mapping", "so_name", "libglobal_mapping.so");
+    if (!global_so.empty()) {
+      spdlog::info("Loading global mapping module: {}", global_so);
+      auto global = glim::GlobalMappingBase::load_module(global_so);
+      if (global) {
+        global_mapping = std::make_shared<glim::AsyncGlobalMapping>(global);
+      }
+    }
+  } else {
+    spdlog::info("Odometry-only mode enabled: bypassing sub-mapping and global mapping modules.");
   }
 
   // Load Viewer if requested
@@ -304,17 +356,6 @@ int main(int argc, char** argv) {
     }
   }
 
-  // Open MCAP reader
-  spdlog::info("Scanning MCAP reader on: {}", input_mcap);
-  std::unique_ptr<aimcap::Reader> reader;
-  try {
-    reader = std::make_unique<aimcap::Reader>(input_mcap, /*add_column_timestamps=*/true);
-    g_active_reader = reader.get();
-  } catch (const std::exception& e) {
-    spdlog::critical("Failed to open MCAP file: {}", e.what());
-    return 1;
-  }
-
   std::ofstream tum_file;
   std::filesystem::create_directories(output_dir);
   std::string tum_path = output_dir + "/trajectory_tum.txt";
@@ -327,44 +368,48 @@ int main(int argc, char** argv) {
   KeyboardHandler keyboard;
   double bag_start_time = -1.0;
   size_t lidar_count = 0;
+  size_t last_stat_lidar_count = 0;
   size_t imu_count = 0;
   auto wall_start = std::chrono::steady_clock::now();
   auto last_stat_time = wall_start;
   double last_stat_bag_time = 0.0;
 
   // IMU Callback
-  reader->OnImu(imu_topic, [&](const std::string&, const aimcap::DecodedImu& imu) {
-    if (g_shutdown_requested.load()) {
-      reader->Stop();
-      return;
-    }
-    const double stamp = imu.time_ns * 1e-9;
-    if (bag_start_time < 0.0) bag_start_time = stamp;
+  if (!no_imu) {
+    reader->OnImu(imu_topic, [&](const std::string&, const aimcap::DecodedImu& imu) {
+      if (g_shutdown_requested.load()) {
+        reader->Stop();
+        return;
+      }
+      const double stamp = imu.time_ns * 1e-9;
+      if (bag_start_time < 0.0) bag_start_time = stamp;
 
-    const double rel_bag_time = stamp - bag_start_time;
-    if (start_offset > 0.0 && rel_bag_time < start_offset) return;
-    if (max_duration > 0.0 && (rel_bag_time - start_offset) > max_duration) {
-      g_shutdown_requested.store(true);
-      reader->Stop();
-      return;
-    }
+      const double rel_bag_time = stamp - bag_start_time;
+      if (start_offset > 0.0 && rel_bag_time < start_offset) return;
+      if (max_duration > 0.0 && (rel_bag_time - start_offset) > max_duration) {
+        g_shutdown_requested.store(true);
+        reader->Stop();
+        return;
+      }
 
-    Eigen::Vector3d linear_acc(imu.linear_acceleration_mps2[0],
-                               imu.linear_acceleration_mps2[1],
-                               imu.linear_acceleration_mps2[2]);
-    Eigen::Vector3d angular_vel(imu.angular_velocity_radps[0],
-                                imu.angular_velocity_radps[1],
-                                imu.angular_velocity_radps[2]);
+      Eigen::Vector3d linear_acc(imu.linear_acceleration_mps2[0],
+                                 imu.linear_acceleration_mps2[1],
+                                 imu.linear_acceleration_mps2[2]);
+      Eigen::Vector3d angular_vel(imu.angular_velocity_radps[0],
+                                  imu.angular_velocity_radps[1],
+                                  imu.angular_velocity_radps[2]);
 
-    if (!time_keeper->validate_imu_stamp(stamp)) return;
+      if (!time_keeper->validate_imu_stamp(stamp)) return;
 
-    odometry_estimation->insert_imu(stamp, linear_acc, angular_vel);
-    if (sub_mapping) sub_mapping->insert_imu(stamp, linear_acc, angular_vel);
-    if (global_mapping) global_mapping->insert_imu(stamp, linear_acc, angular_vel);
-    imu_count++;
-  });
+      odometry_estimation->insert_imu(stamp, linear_acc, angular_vel);
+      if (sub_mapping) sub_mapping->insert_imu(stamp, linear_acc, angular_vel);
+      if (global_mapping) global_mapping->insert_imu(stamp, linear_acc, angular_vel);
+      imu_count++;
+    });
+  }
 
   // Point Cloud Callback
+  double last_cloud_stamp = -1.0;
   reader->OnPointCloud(lidar_topic, [&](const std::string&, const aimcap::DecodedPointCloud& cloud) {
     if (g_shutdown_requested.load()) {
       reader->Stop();
@@ -405,6 +450,13 @@ int main(int argc, char** argv) {
       }
     }
 
+    double scan_duration = 0.05; // 20 Hz default
+    if (last_cloud_stamp > 0.0) {
+      double dt = stamp - last_cloud_stamp;
+      if (dt > 0.005 && dt < 0.5) scan_duration = dt;
+    }
+    last_cloud_stamp = stamp;
+
     auto raw_points = std::make_shared<glim::RawPoints>();
     raw_points->stamp = stamp;
 
@@ -415,31 +467,72 @@ int main(int argc, char** argv) {
     if (!fi) fi = findField(cloud.fields, "reflectivity");
     const auto* ft = findField(cloud.fields, "t");
 
-    if (!fx || !fy || !fz) {
-      spdlog::warn("Point cloud missing x, y, or z field!");
-      return;
+    // Detect legacy 16-byte packed int32 in centimeters (e.g. 2022/2025 raw lidar logs with stride=8 INT16 metadata)
+    bool is_legacy_int32_cm = (point_scale > 0.0);
+    if (!is_legacy_int32_cm && cloud.data.size() % 16 == 0 && cloud.point_step == 8) {
+      if (fx && fy && fz && fx->type == aimcap::PointFieldType::INT16 && fy->type == aimcap::PointFieldType::INT16) {
+        static bool s_warned_legacy = false;
+        if (!s_warned_legacy) {
+          spdlog::info("Detected legacy 16-byte packed int32 [cm] point format with 8-byte INT16 metadata. Decoding with 0.01m scale.");
+          s_warned_legacy = true;
+        }
+        is_legacy_int32_cm = true;
+      }
     }
 
-    const size_t num_points = cloud.width * cloud.height;
-    raw_points->points.reserve(num_points);
-    raw_points->times.reserve(num_points);
-    raw_points->intensities.reserve(num_points);
+    if (is_legacy_int32_cm) {
+      const size_t num_points = cloud.data.size() / 16;
+      raw_points->points.reserve(num_points);
+      raw_points->times.reserve(num_points);
+      raw_points->intensities.reserve(num_points);
 
-    for (size_t i = 0; i < num_points; ++i) {
-      const uint8_t* p = cloud.data.data() + i * cloud.point_step;
-      float x = static_cast<float>(readFieldAsDouble(p, *fx));
-      float y = static_cast<float>(readFieldAsDouble(p, *fy));
-      float z = static_cast<float>(readFieldAsDouble(p, *fz));
+      const int32_t* i32_ptr = reinterpret_cast<const int32_t*>(cloud.data.data());
+      const float scale = (point_scale > 0.0) ? static_cast<float>(point_scale) : 0.01f;
 
-      if (x == 0.0f && y == 0.0f && z == 0.0f) continue;
-      if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) continue;
+      for (size_t i = 0; i < num_points; ++i) {
+        int32_t ix = i32_ptr[i * 4 + 0];
+        int32_t iy = i32_ptr[i * 4 + 1];
+        int32_t iz = i32_ptr[i * 4 + 2];
+        uint32_t ir = static_cast<uint32_t>(i32_ptr[i * 4 + 3]);
 
-      double intensity = fi ? readFieldAsDouble(p, *fi) : 0.0;
-      double t_rel = ft ? (readFieldAsDouble(p, *ft) * 1e-9) : 0.0;
+        if (ix == 0 && iy == 0 && iz == 0) continue;
+        float x = ix * scale;
+        float y = iy * scale;
+        float z = iz * scale;
+        if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) continue;
 
-      raw_points->points.emplace_back(x, y, z, 1.0);
-      raw_points->intensities.push_back(intensity);
-      raw_points->times.push_back(t_rel);
+        double t_rel = scan_duration * (static_cast<double>(i) / static_cast<double>(num_points));
+        raw_points->points.emplace_back(x, y, z, 1.0);
+        raw_points->intensities.push_back(static_cast<double>(ir));
+        raw_points->times.push_back(t_rel);
+      }
+    } else {
+      if (!fx || !fy || !fz) {
+        spdlog::warn("Point cloud missing x, y, or z field!");
+        return;
+      }
+
+      const size_t num_points = cloud.width * cloud.height;
+      raw_points->points.reserve(num_points);
+      raw_points->times.reserve(num_points);
+      raw_points->intensities.reserve(num_points);
+
+      for (size_t i = 0; i < num_points; ++i) {
+        const uint8_t* p = cloud.data.data() + i * cloud.point_step;
+        float x = static_cast<float>(readFieldAsDouble(p, *fx));
+        float y = static_cast<float>(readFieldAsDouble(p, *fy));
+        float z = static_cast<float>(readFieldAsDouble(p, *fz));
+
+        if (x == 0.0f && y == 0.0f && z == 0.0f) continue;
+        if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) continue;
+
+        double intensity = fi ? readFieldAsDouble(p, *fi) : 0.0;
+        double t_rel = ft ? (readFieldAsDouble(p, *ft) * 1e-9) : (scan_duration * (static_cast<double>(i) / static_cast<double>(num_points)));
+
+        raw_points->points.emplace_back(x, y, z, 1.0);
+        raw_points->intensities.push_back(intensity);
+        raw_points->times.push_back(t_rel);
+      }
     }
 
     if (!time_keeper->process(raw_points)) return;
@@ -451,21 +544,23 @@ int main(int argc, char** argv) {
     std::vector<glim::EstimationFrame::ConstPtr> est_frames, marg_frames;
     odometry_estimation->get_results(est_frames, marg_frames);
 
-    if (sub_mapping) {
-      for (const auto& frame : marg_frames) {
+    for (const auto& frame : marg_frames) {
+      if (sub_mapping) {
         sub_mapping->insert_frame(frame);
-
-        // Record TUM trajectory
-        if (tum_file.is_open()) {
-          const Eigen::Vector3d t = frame->T_world_lidar.translation();
-          const Eigen::Quaterniond q(frame->T_world_lidar.linear());
-          tum_file << frame->stamp << " "
-                   << t.x() << " " << t.y() << " " << t.z() << " "
-                   << q.x() << " " << q.y() << " " << q.z() << " " << q.w() << "\n";
-          tum_file.flush();
-        }
       }
 
+      // Record TUM trajectory
+      if (tum_file.is_open()) {
+        const Eigen::Vector3d t = frame->T_world_lidar.translation();
+        const Eigen::Quaterniond q(frame->T_world_lidar.linear());
+        tum_file << frame->stamp << " "
+                 << t.x() << " " << t.y() << " " << t.z() << " "
+                 << q.x() << " " << q.y() << " " << q.z() << " " << q.w() << "\n";
+        tum_file.flush();
+      }
+    }
+
+    if (sub_mapping) {
       auto submaps = sub_mapping->get_results();
       for (const auto& submap : submaps) {
         if (global_mapping) {
@@ -485,12 +580,14 @@ int main(int argc, char** argv) {
     if (dt_stat >= 5.0) {
       double bag_dt = rel_bag_time - last_stat_bag_time;
       double speed = dt_stat > 0 ? (bag_dt / dt_stat) : 0.0;
+      double fps = dt_stat > 0 ? (static_cast<double>(lidar_count - last_stat_lidar_count) / dt_stat) : 0.0;
       int sub_wl = sub_mapping ? sub_mapping->workload() : 0;
       int glob_wl = global_mapping ? global_mapping->workload() : 0;
-      spdlog::info("[progress] bag_time: {:.1f}s | scans: {} | imu: {} | speed: {:.2f}x | queue: odom={} sub={} glob={}",
-                   rel_bag_time, lidar_count, imu_count, speed, odometry_estimation->workload(), sub_wl, glob_wl);
+      spdlog::info("[progress] bag_time: {:.1f}s | scans: {} | speed: {:.2f}x ({:.1f} FPS) | queue: odom={} sub={} glob={}",
+                   rel_bag_time, lidar_count, speed, fps, odometry_estimation->workload(), sub_wl, glob_wl);
       last_stat_time = wall_now;
       last_stat_bag_time = rel_bag_time;
+      last_stat_lidar_count = lidar_count;
     }
   });
 
@@ -507,19 +604,22 @@ int main(int argc, char** argv) {
   spdlog::info("Replay finished or interrupted. Finalizing estimation and mapping...");
   odometry_estimation->join();
 
-  if (sub_mapping) {
-    std::vector<glim::EstimationFrame::ConstPtr> est_frames, marg_frames;
-    odometry_estimation->get_results(est_frames, marg_frames);
-    for (const auto& frame : marg_frames) {
+  std::vector<glim::EstimationFrame::ConstPtr> est_frames, marg_frames;
+  odometry_estimation->get_results(est_frames, marg_frames);
+  for (const auto& frame : marg_frames) {
+    if (sub_mapping) {
       sub_mapping->insert_frame(frame);
-      if (tum_file.is_open()) {
-        const Eigen::Vector3d t = frame->T_world_lidar.translation();
-        const Eigen::Quaterniond q(frame->T_world_lidar.linear());
-        tum_file << frame->stamp << " "
-                 << t.x() << " " << t.y() << " " << t.z() << " "
-                 << q.x() << " " << q.y() << " " << q.z() << " " << q.w() << "\n";
-      }
     }
+    if (tum_file.is_open()) {
+      const Eigen::Vector3d t = frame->T_world_lidar.translation();
+      const Eigen::Quaterniond q(frame->T_world_lidar.linear());
+      tum_file << frame->stamp << " "
+               << t.x() << " " << t.y() << " " << t.z() << " "
+               << q.x() << " " << q.y() << " " << q.z() << " " << q.w() << "\n";
+    }
+  }
+
+  if (sub_mapping) {
     sub_mapping->join();
 
     auto submaps = sub_mapping->get_results();
@@ -539,6 +639,10 @@ int main(int argc, char** argv) {
     spdlog::info("Trajectory written to {}", tum_path);
   }
 
-  spdlog::info("GLIM mapping completed successfully. Total scans: {}, IMU samples: {}", lidar_count, imu_count);
+  auto wall_end = std::chrono::steady_clock::now();
+  double total_wall = std::chrono::duration<double>(wall_end - wall_start).count();
+  double avg_fps = total_wall > 0 ? (static_cast<double>(lidar_count) / total_wall) : 0.0;
+  spdlog::info("GLIM {} completed in {:.2f}s | Total scans: {} | Avg FPS: {:.1f}",
+               odom_only ? "odometry" : "mapping", total_wall, lidar_count, avg_fps);
   return 0;
 }
