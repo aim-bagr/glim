@@ -659,7 +659,28 @@ async function fetchRuns() {
 
     if (window.lucide) lucide.createIcons();
 
-    if (prevSelectVal && Array.from(viewerRunSelect.options).some(o => o.value === prevSelectVal)) {
+    // Check URL query parameters for auto-loading run & layer state
+    const urlParams = new URLSearchParams(window.location.search);
+    const runParam = urlParams.get('run');
+    if (runParam && runs.some(r => r.name === runParam)) {
+      viewerRunSelect.value = runParam;
+      if (urlParams.has('map')) {
+        const showMap = urlParams.get('map') !== '0' && urlParams.get('map') !== 'false';
+        viewerMapToggle.checked = showMap;
+        isMapVisible = showMap;
+      }
+      if (urlParams.has('traj')) {
+        const showTraj = urlParams.get('traj') !== '0' && urlParams.get('traj') !== 'false';
+        viewerTrajToggle.checked = showTraj;
+        isTrajVisible = showTraj;
+      }
+      if (urlParams.has('loops')) {
+        const showLoops = urlParams.get('loops') !== '0' && urlParams.get('loops') !== 'false';
+        viewerLoopsToggle.checked = showLoops;
+        isLoopsVisible = showLoops;
+      }
+      loadMapRun(runParam);
+    } else if (prevSelectVal && Array.from(viewerRunSelect.options).some(o => o.value === prevSelectVal)) {
       viewerRunSelect.value = prevSelectVal;
     }
   } catch (err) {
