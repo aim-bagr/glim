@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import struct
 import asyncio
 from pathlib import Path
@@ -83,8 +84,74 @@ async def get_run_file(run_name: str, filename: str):
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(path=str(file_path), filename=filename)
 
-# In-memory cache for parsed submap metadata
+# In-memory cache for parsed submap metadata & loop closures
 _submap_metadata_cache = {}
+_loops_cache = {}
+
+@app.get("/api/runs/{run_name}/loops")
+async def get_run_loops(run_name: str):
+    is_live = (manager.job.state in ["running", "finalizing"] and manager.job.run_name == run_name)
+    if not is_live and run_name in _loops_cache:
+        return _loops_cache[run_name]
+
+    run_dir = manager.results_dir / run_name
+    if not run_dir.exists():
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    graph_file = run_dir / "graph.bin"
+    if not graph_file.exists():
+        return {"count": 0, "loops": []}
+
+    cache_file = run_dir / "loops.json"
+    if cache_file.exists():
+        try:
+            if cache_file.stat().st_mtime >= graph_file.stat().st_mtime:
+                with open(cache_file, "r") as f:
+                    data = json.load(f)
+                    _loops_cache[run_name] = data
+                    return data
+        except Exception:
+            pass
+
+    # High-performance byte scanning parser for GTSAM BetweenFactor symbols
+    try:
+        with open(graph_file, "rb") as f:
+            data = f.read()
+
+        loops = set()
+        x_byte = ord('x')
+        pos = 7
+        data_len = len(data)
+
+        while True:
+            pos = data.find(b'x', pos)
+            if pos == -1 or pos + 8 >= data_len:
+                break
+            if data[pos + 8] == x_byte:
+                k1 = struct.unpack('<Q', data[pos - 7:pos + 1])[0]
+                k2 = struct.unpack('<Q', data[pos + 1:pos + 9])[0]
+                id1 = k1 & 0x00FFFFFFFFFFFFFF
+                id2 = k2 & 0x00FFFFFFFFFFFFFF
+                if id1 < 100000 and id2 < 100000 and abs(id1 - id2) > 1:
+                    loops.add((min(id1, id2), max(id1, id2)))
+            pos += 1
+
+        sorted_loops = sorted(list(loops))
+        payload = {
+            "count": len(sorted_loops),
+            "loops": sorted_loops
+        }
+
+        try:
+            with open(cache_file, "w") as f:
+                json.dump(payload, f)
+        except (PermissionError, OSError):
+            pass
+
+        _loops_cache[run_name] = payload
+        return payload
+    except Exception as e:
+        return {"count": 0, "loops": [], "error": str(e)}
 
 @app.get("/api/runs/{run_name}/submaps")
 async def get_run_submaps(run_name: str):
