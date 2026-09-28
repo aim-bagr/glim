@@ -305,6 +305,27 @@
 
       <div class="h-4 w-px bg-slate-800"></div>
 
+      <!-- Visibility Layers (Trajectory & Loop Closures) -->
+      <div class="flex items-center gap-2">
+        <label class="flex items-center gap-1.5 cursor-pointer font-medium text-slate-300 select-none" title="Toggle Trajectory Line (O)">
+          <input type="checkbox" id="viewer-traj-toggle" checked class="rounded border-slate-700 bg-slate-900 text-sky-500 focus:ring-0">
+          <span class="flex items-center gap-1">
+            <span class="w-2 h-2 rounded-full bg-sky-400"></span>
+            <span>Traj</span>
+          </span>
+        </label>
+        <label class="flex items-center gap-1.5 cursor-pointer font-medium text-slate-300 select-none" title="Toggle Loop Closures (L)">
+          <input type="checkbox" id="viewer-loops-toggle" checked class="rounded border-slate-700 bg-slate-900 text-emerald-500 focus:ring-0">
+          <span class="flex items-center gap-1">
+            <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+            <span>Loops</span>
+            <span id="hud-loops-count" class="hidden text-[10px] text-emerald-300 bg-emerald-950/80 border border-emerald-800/80 px-1 py-0.2 rounded font-mono font-normal">0</span>
+          </span>
+        </label>
+      </div>
+
+      <div class="h-4 w-px bg-slate-800"></div>
+
       <!-- Camera Presets -->
       <div class="flex items-center gap-1">
         <button id="viewer-fit-btn" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 rounded flex items-center gap-1 transition" title="Fit Entire Map into Camera (R)">

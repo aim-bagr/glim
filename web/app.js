@@ -14,6 +14,10 @@ let threeScene, threeCamera, threeRenderer, threeControls;
 let currentRunSubmaps = [];
 let submapCache = new Map(); // submap_id -> THREE.Points
 let threeTrajectoryLine = null;
+let threeLoopLines = null;
+let currentRunLoops = [];
+let isTrajVisible = true;
+let isLoopsVisible = true;
 let activeSubmapMarker = null;
 let activeSubmapId = null;
 let isIsolated = false;
@@ -82,6 +86,9 @@ const viewerSubmapSlider = document.getElementById('viewer-submap-slider');
 const viewerFocusBtn = document.getElementById('viewer-focus-btn');
 const viewerFitBtn = document.getElementById('viewer-fit-btn');
 const viewerTopdownBtn = document.getElementById('viewer-topdown-btn');
+const viewerTrajToggle = document.getElementById('viewer-traj-toggle');
+const viewerLoopsToggle = document.getElementById('viewer-loops-toggle');
+const hudLoopsCount = document.getElementById('hud-loops-count');
 const viewerColorMode = document.getElementById('viewer-color-mode');
 const viewerPointSize = document.getElementById('viewer-point-size');
 const viewerHud = document.getElementById('viewer-hud');
@@ -280,7 +287,27 @@ function updateViewerControlsState() {
   viewerPointSize.classList.toggle('opacity-40', !hasSubmaps);
   viewerPointSize.classList.toggle('cursor-not-allowed', !hasSubmaps);
 
-  // 8. Clear Button
+  // 8. Trajectory Toggle
+  const hasTraj = threeTrajectoryLine !== null;
+  viewerTrajToggle.disabled = !hasTraj;
+  const trajLabel = viewerTrajToggle.closest('label');
+  if (trajLabel) {
+    trajLabel.classList.toggle('opacity-40', !hasTraj);
+    trajLabel.classList.toggle('cursor-not-allowed', !hasTraj);
+    trajLabel.classList.toggle('pointer-events-none', !hasTraj);
+  }
+
+  // 9. Loops Toggle
+  const hasLoops = currentRunLoops && currentRunLoops.length > 0;
+  viewerLoopsToggle.disabled = !hasLoops;
+  const loopsLabel = viewerLoopsToggle.closest('label');
+  if (loopsLabel) {
+    loopsLabel.classList.toggle('opacity-40', !hasLoops);
+    loopsLabel.classList.toggle('cursor-not-allowed', !hasLoops);
+    loopsLabel.classList.toggle('pointer-events-none', !hasLoops);
+  }
+
+  // 10. Clear Button
   viewerClearBtn.disabled = (viewerMode === 'idle');
   viewerClearBtn.classList.toggle('opacity-40', viewerMode === 'idle');
   viewerClearBtn.classList.toggle('cursor-not-allowed', viewerMode === 'idle');
@@ -923,6 +950,20 @@ function setup3DViewerControls() {
     });
   });
 
+  viewerTrajToggle.addEventListener('change', (e) => {
+    isTrajVisible = e.target.checked;
+    if (threeTrajectoryLine) {
+      threeTrajectoryLine.visible = isTrajVisible;
+    }
+    showToast(`Trajectory line: ${isTrajVisible ? 'Visible' : 'Hidden'}`, 'info');
+  });
+
+  viewerLoopsToggle.addEventListener('change', (e) => {
+    isLoopsVisible = e.target.checked;
+    updateLoopLines();
+    showToast(`Loop closures: ${isLoopsVisible ? 'Visible' : 'Hidden'}`, 'info');
+  });
+
   // Global Keyboard Shortcuts
   window.addEventListener('keydown', (e) => {
     if (['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName)) {
@@ -955,6 +996,16 @@ function setup3DViewerControls() {
       if (!viewerIsolateToggle.disabled) {
         viewerIsolateToggle.checked = !viewerIsolateToggle.checked;
         viewerIsolateToggle.dispatchEvent(new Event('change'));
+      }
+    } else if (e.key === 'o' || e.key === 'O') {
+      if (!viewerTrajToggle.disabled) {
+        viewerTrajToggle.checked = !viewerTrajToggle.checked;
+        viewerTrajToggle.dispatchEvent(new Event('change'));
+      }
+    } else if (e.key === 'l' || e.key === 'L') {
+      if (!viewerLoopsToggle.disabled) {
+        viewerLoopsToggle.checked = !viewerLoopsToggle.checked;
+        viewerLoopsToggle.dispatchEvent(new Event('change'));
       }
     }
   });
@@ -1047,6 +1098,18 @@ function clear3DScene() {
     threeTrajectoryLine = null;
   }
 
+  if (threeLoopLines) {
+    threeScene.remove(threeLoopLines);
+    if (threeLoopLines.geometry) threeLoopLines.geometry.dispose();
+    if (threeLoopLines.material) threeLoopLines.material.dispose();
+    threeLoopLines = null;
+  }
+  currentRunLoops = [];
+  if (hudLoopsCount) {
+    hudLoopsCount.classList.add('hidden');
+    hudLoopsCount.textContent = '0';
+  }
+
   if (activeSubmapMarker) {
     activeSubmapMarker.visible = false;
   }
@@ -1087,6 +1150,10 @@ async function loadMapRun(runName) {
     if (thisSessionId !== loadSessionId) return;
 
     currentRunSubmaps = submaps;
+
+    // Load Loop Closures
+    await loadLoopClosures(runName);
+    if (thisSessionId !== loadSessionId) return;
 
     if (currentRunSubmaps.length === 0) {
       hudSubmapText.textContent = 'No submaps recorded';
@@ -1194,15 +1261,125 @@ async function loadTrajectory(runName, opt = true) {
       threeTrajectoryLine.geometry.dispose();
       threeTrajectoryLine.geometry = new THREE.BufferGeometry();
       threeTrajectoryLine.geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      threeTrajectoryLine.visible = isTrajVisible;
     } else {
       const geom = new THREE.BufferGeometry();
       geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
       const mat = new THREE.LineBasicMaterial({ color: 0x38bdf8, linewidth: 2 });
       threeTrajectoryLine = new THREE.Line(geom, mat);
+      threeTrajectoryLine.visible = isTrajVisible;
       threeScene.add(threeTrajectoryLine);
     }
   } catch (err) {
     console.warn('Trajectory fetch failed:', err);
+  }
+}
+
+// Load Loop Closures from GLIM factor graph
+async function loadLoopClosures(runName) {
+  try {
+    const res = await fetch(`/api/runs/${encodeURIComponent(runName)}/loops`);
+    if (!res.ok) return;
+    const data = await res.json();
+    currentRunLoops = data.loops || [];
+
+    if (hudLoopsCount) {
+      if (currentRunLoops.length > 0) {
+        hudLoopsCount.textContent = currentRunLoops.length.toLocaleString();
+        hudLoopsCount.classList.remove('hidden');
+      } else {
+        hudLoopsCount.classList.add('hidden');
+      }
+    }
+
+    updateLoopLines();
+    updateViewerControlsState();
+  } catch (err) {
+    console.warn('Loop closures fetch failed:', err);
+  }
+}
+
+// Render or update loop closure lines in 3D Scene
+function updateLoopLines() {
+  if (!threeScene) return;
+
+  if (!isLoopsVisible || !currentRunLoops || currentRunLoops.length === 0 || !currentRunSubmaps || currentRunSubmaps.length === 0) {
+    if (threeLoopLines) {
+      threeLoopLines.visible = false;
+    }
+    return;
+  }
+
+  // Fast mapping of submap ID -> origin position [x, y, z]
+  const submapPosMap = new Map();
+  for (let i = 0; i < currentRunSubmaps.length; i++) {
+    const sm = currentRunSubmaps[i];
+    if (sm && sm.pos && sm.pos.length === 3) {
+      submapPosMap.set(sm.id, sm.pos);
+    }
+  }
+
+  // Filter loops: if in isolation mode, show only loops connecting to the active submap
+  let activeLoops = currentRunLoops;
+  if (isIsolated && activeSubmapId !== null) {
+    activeLoops = currentRunLoops.filter(([id1, id2]) => id1 === activeSubmapId || id2 === activeSubmapId);
+  }
+
+  if (activeLoops.length === 0) {
+    if (threeLoopLines) {
+      threeLoopLines.visible = false;
+    }
+    return;
+  }
+
+  // Build Float32Array positions: 2 vertices per line (6 floats)
+  const positions = new Float32Array(activeLoops.length * 6);
+  let pIdx = 0;
+  let validLines = 0;
+
+  for (let i = 0; i < activeLoops.length; i++) {
+    const [id1, id2] = activeLoops[i];
+    const p1 = submapPosMap.get(id1);
+    const p2 = submapPosMap.get(id2);
+    if (!p1 || !p2) continue;
+
+    positions[pIdx++] = p1[0];
+    positions[pIdx++] = p1[1];
+    positions[pIdx++] = p1[2];
+
+    positions[pIdx++] = p2[0];
+    positions[pIdx++] = p2[1];
+    positions[pIdx++] = p2[2];
+    validLines++;
+  }
+
+  if (validLines === 0) {
+    if (threeLoopLines) {
+      threeLoopLines.visible = false;
+    }
+    return;
+  }
+
+  const finalPositions = positions.subarray(0, validLines * 6);
+
+  if (threeLoopLines) {
+    threeLoopLines.geometry.dispose();
+    threeLoopLines.geometry = new THREE.BufferGeometry();
+    threeLoopLines.geometry.setAttribute('position', new THREE.BufferAttribute(finalPositions, 3));
+    threeLoopLines.visible = isLoopsVisible;
+  } else {
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(finalPositions, 3));
+    // Emerald green (0x10b981) for loop closure edges
+    const mat = new THREE.LineBasicMaterial({
+      color: 0x10b981,
+      linewidth: 2,
+      transparent: true,
+      opacity: 0.8
+    });
+    threeLoopLines = new THREE.LineSegments(geom, mat);
+    threeLoopLines.visible = isLoopsVisible;
+    threeScene.add(threeLoopLines);
   }
 }
 
@@ -1348,10 +1525,12 @@ function onActiveSubmapChanged(submapId) {
   activeSubmapId = submapId;
   if (viewerSubmapSlider) viewerSubmapSlider.value = submapId;
   const sm = currentRunSubmaps.find(s => s.id === submapId);
+  const smLoops = currentRunLoops.filter(([id1, id2]) => id1 === submapId || id2 === submapId).length;
+  const loopInfo = smLoops > 0 ? ` • ${smLoops} loops` : '';
   if (sm) {
-    hudSubmapText.textContent = `Submap #${String(submapId).padStart(4, '0')} (${sm.num_points.toLocaleString()} pts)`;
+    hudSubmapText.textContent = `Submap #${String(submapId).padStart(4, '0')} (${sm.num_points.toLocaleString()} pts)${loopInfo}`;
   } else {
-    hudSubmapText.textContent = `Submap #${submapId}`;
+    hudSubmapText.textContent = `Submap #${submapId}${loopInfo}`;
   }
   updateSubmapVisibility();
   loadSubmapPoints(currentRunName, submapId);
@@ -1379,6 +1558,7 @@ function updateSubmapVisibility() {
   });
 
   updateActiveSubmapMarker(activeSubmapId);
+  updateLoopLines();
 }
 
 // Focus Camera smoothly on Submap Position
