@@ -73,6 +73,9 @@ const viewerRunSelect = document.getElementById('viewer-run-select');
 const viewerLoadBtn = document.getElementById('viewer-load-btn');
 const viewerClearBtn = document.getElementById('viewer-clear-btn');
 const viewerIsolateToggle = document.getElementById('viewer-isolate-toggle');
+const viewerPlayBtn = document.getElementById('viewer-play-btn');
+const viewerPlayBtnLabel = document.getElementById('viewer-play-btn-label');
+const viewerPlaySpeed = document.getElementById('viewer-play-speed');
 const viewerPrevBtn = document.getElementById('viewer-prev-btn');
 const viewerNextBtn = document.getElementById('viewer-next-btn');
 const viewerSubmapSlider = document.getElementById('viewer-submap-slider');
@@ -83,6 +86,10 @@ const viewerColorMode = document.getElementById('viewer-color-mode');
 const viewerPointSize = document.getElementById('viewer-point-size');
 const viewerHud = document.getElementById('viewer-hud');
 const hudSubmapText = document.getElementById('hud-submap-text');
+
+// Submap Playback State
+let isPlayingSubmaps = false;
+let playSubmapTimer = null;
 
 // Toast System
 let toastTimer = null;
@@ -209,6 +216,18 @@ function updateViewerControlsState() {
     isolateLabel.classList.toggle('opacity-40', !hasSubmaps);
     isolateLabel.classList.toggle('cursor-not-allowed', !hasSubmaps);
     isolateLabel.classList.toggle('pointer-events-none', !hasSubmaps);
+  }
+
+  // 1b. Play & Speed: enabled only if multiple submaps
+  const canPlay = hasSubmaps && count > 1;
+  viewerPlayBtn.disabled = !canPlay;
+  viewerPlayBtn.classList.toggle('opacity-40', !canPlay);
+  viewerPlayBtn.classList.toggle('cursor-not-allowed', !canPlay);
+  viewerPlaySpeed.disabled = !canPlay;
+  viewerPlaySpeed.classList.toggle('opacity-40', !canPlay);
+  viewerPlaySpeed.classList.toggle('cursor-not-allowed', !canPlay);
+  if (!canPlay && isPlayingSubmaps) {
+    stopSubmapPlayback();
   }
 
   // 2. Previous (<) button: enabled only if activeSubmapId > 0
@@ -840,12 +859,24 @@ function setup3DViewerControls() {
     showToast(isIsolated ? 'Isolate mode ON (Single submap)' : 'Showing all submaps', 'info');
   });
 
+  viewerPlayBtn.addEventListener('click', toggleSubmapPlayback);
+
+  viewerPlaySpeed.addEventListener('change', () => {
+    if (isPlayingSubmaps) {
+      const interval = parseInt(viewerPlaySpeed.value, 10) || 200;
+      scheduleNextSubmapPlay(interval);
+      showToast(`Playback speed: ${viewerPlaySpeed.options[viewerPlaySpeed.selectedIndex].text}`, 'info');
+    }
+  });
+
   viewerSubmapSlider.addEventListener('input', (e) => {
+    stopSubmapPlayback();
     activeSubmapId = parseInt(e.target.value, 10);
     onActiveSubmapChanged(activeSubmapId);
   });
 
   viewerPrevBtn.addEventListener('click', () => {
+    stopSubmapPlayback();
     if (currentRunSubmaps.length === 0) return;
     if (activeSubmapId === null) activeSubmapId = 0;
     if (activeSubmapId > 0) {
@@ -856,6 +887,7 @@ function setup3DViewerControls() {
   });
 
   viewerNextBtn.addEventListener('click', () => {
+    stopSubmapPlayback();
     if (currentRunSubmaps.length === 0) return;
     if (activeSubmapId === null) activeSubmapId = -1;
     if (activeSubmapId < currentRunSubmaps.length - 1) {
@@ -902,6 +934,11 @@ function setup3DViewerControls() {
       launcherModal.classList.add('hidden');
       runsModal.classList.add('hidden');
       updateModalButtonStates();
+    } else if (e.key === ' ' || e.key === 'p' || e.key === 'P') {
+      e.preventDefault();
+      if (!viewerPlayBtn.disabled) {
+        toggleSubmapPlayback();
+      }
     } else if (e.key === 'ArrowLeft') {
       e.preventDefault();
       if (!viewerPrevBtn.disabled) viewerPrevBtn.click();
@@ -989,6 +1026,7 @@ function setTopDownView() {
 
 // Clear Scene Completely Between Runs
 function clear3DScene() {
+  stopSubmapPlayback();
   loadSessionId++; // Invalidate any running background submap streams or polls
   if (liveStreamTimer) {
     clearInterval(liveStreamTimer);
@@ -1209,6 +1247,100 @@ function turboColormap(t) {
     Math.max(0, Math.min(1, g)),
     Math.max(0, Math.min(1, b * 0.9 + 0.1))
   ];
+}
+
+// ============================================================================
+// SUBMAP PLAYBACK ENGINE
+// ============================================================================
+
+function startSubmapPlayback() {
+  if (!currentRunSubmaps || currentRunSubmaps.length <= 1) return;
+  if (isPlayingSubmaps) return;
+
+  // Auto-enable isolate mode if not active so user immediately sees isolated submaps
+  if (!isIsolated) {
+    viewerIsolateToggle.checked = true;
+    isIsolated = true;
+    updateSubmapVisibility();
+  }
+
+  // If at the last submap, rewind to beginning to play the full sequence
+  if (activeSubmapId === null || activeSubmapId >= currentRunSubmaps.length - 1) {
+    onActiveSubmapChanged(0);
+  }
+
+  isPlayingSubmaps = true;
+  updatePlayButtonUI();
+
+  const interval = parseInt(viewerPlaySpeed.value, 10) || 200;
+  scheduleNextSubmapPlay(interval);
+}
+
+function stopSubmapPlayback() {
+  if (!isPlayingSubmaps && !playSubmapTimer) return;
+  isPlayingSubmaps = false;
+  if (playSubmapTimer) {
+    clearTimeout(playSubmapTimer);
+    playSubmapTimer = null;
+  }
+  updatePlayButtonUI();
+}
+
+function toggleSubmapPlayback() {
+  if (isPlayingSubmaps) {
+    stopSubmapPlayback();
+    showToast('Playback stopped', 'info');
+  } else {
+    startSubmapPlayback();
+    showToast('Playing submaps forward', 'info');
+  }
+}
+
+function updatePlayButtonUI() {
+  if (!viewerPlayBtn) return;
+  if (isPlayingSubmaps) {
+    viewerPlayBtn.classList.remove('bg-slate-800', 'text-emerald-400', 'hover:bg-slate-700');
+    viewerPlayBtn.classList.add('bg-amber-600', 'text-white', 'hover:bg-amber-500');
+    viewerPlayBtn.title = 'Stop Submap Forwarding (Space / P)';
+    viewerPlayBtn.innerHTML = '<i data-lucide="square" class="w-3 h-3 fill-current"></i><span id="viewer-play-btn-label">Stop</span>';
+  } else {
+    viewerPlayBtn.classList.remove('bg-amber-600', 'text-white', 'hover:bg-amber-500');
+    viewerPlayBtn.classList.add('bg-slate-800', 'text-emerald-400', 'hover:bg-slate-700');
+    viewerPlayBtn.title = 'Play/Stop Submap Forwarding (Space / P)';
+    viewerPlayBtn.innerHTML = '<i data-lucide="play" class="w-3.5 h-3.5 fill-current"></i><span id="viewer-play-btn-label">Play</span>';
+  }
+  if (window.lucide) lucide.createIcons();
+}
+
+function scheduleNextSubmapPlay(interval) {
+  if (playSubmapTimer) clearTimeout(playSubmapTimer);
+  playSubmapTimer = setTimeout(() => {
+    if (!isPlayingSubmaps) return;
+    if (!currentRunSubmaps || currentRunSubmaps.length === 0) {
+      stopSubmapPlayback();
+      return;
+    }
+
+    let nextId = (activeSubmapId === null) ? 0 : activeSubmapId + 1;
+    if (nextId >= currentRunSubmaps.length) {
+      stopSubmapPlayback();
+      showToast('Finished submap playback', 'info');
+      return;
+    }
+
+    onActiveSubmapChanged(nextId);
+
+    // Pre-fetch upcoming submap point clouds ahead to ensure zero stutter
+    for (let ahead = 1; ahead <= 4; ahead++) {
+      const preId = nextId + ahead;
+      if (preId < currentRunSubmaps.length && !submapCache.has(preId)) {
+        loadSubmapPoints(currentRunName, preId);
+      }
+    }
+
+    const currentInterval = parseInt(viewerPlaySpeed.value, 10) || 200;
+    scheduleNextSubmapPlay(currentInterval);
+  }, interval);
 }
 
 // Active Submap Selection Changed
