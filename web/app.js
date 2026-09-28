@@ -16,6 +16,7 @@ let submapCache = new Map(); // submap_id -> THREE.Points
 let threeTrajectoryLine = null;
 let threeLoopLines = null;
 let currentRunLoops = [];
+let isMapVisible = true;
 let isTrajVisible = true;
 let isLoopsVisible = true;
 let activeSubmapMarker = null;
@@ -86,6 +87,7 @@ const viewerSubmapSlider = document.getElementById('viewer-submap-slider');
 const viewerFocusBtn = document.getElementById('viewer-focus-btn');
 const viewerFitBtn = document.getElementById('viewer-fit-btn');
 const viewerTopdownBtn = document.getElementById('viewer-topdown-btn');
+const viewerMapToggle = document.getElementById('viewer-map-toggle');
 const viewerTrajToggle = document.getElementById('viewer-traj-toggle');
 const viewerLoopsToggle = document.getElementById('viewer-loops-toggle');
 const hudLoopsCount = document.getElementById('hud-loops-count');
@@ -287,7 +289,16 @@ function updateViewerControlsState() {
   viewerPointSize.classList.toggle('opacity-40', !hasSubmaps);
   viewerPointSize.classList.toggle('cursor-not-allowed', !hasSubmaps);
 
-  // 8. Trajectory Toggle
+  // 8. Map Toggle
+  viewerMapToggle.disabled = !hasSubmaps;
+  const mapLabel = viewerMapToggle.closest('label');
+  if (mapLabel) {
+    mapLabel.classList.toggle('opacity-40', !hasSubmaps);
+    mapLabel.classList.toggle('cursor-not-allowed', !hasSubmaps);
+    mapLabel.classList.toggle('pointer-events-none', !hasSubmaps);
+  }
+
+  // 9. Trajectory Toggle
   const hasTraj = threeTrajectoryLine !== null;
   viewerTrajToggle.disabled = !hasTraj;
   const trajLabel = viewerTrajToggle.closest('label');
@@ -950,6 +961,12 @@ function setup3DViewerControls() {
     });
   });
 
+  viewerMapToggle.addEventListener('change', (e) => {
+    isMapVisible = e.target.checked;
+    updateSubmapVisibility();
+    showToast(`Point cloud map: ${isMapVisible ? 'Visible' : 'Hidden'}`, 'info');
+  });
+
   viewerTrajToggle.addEventListener('change', (e) => {
     isTrajVisible = e.target.checked;
     if (threeTrajectoryLine) {
@@ -996,6 +1013,11 @@ function setup3DViewerControls() {
       if (!viewerIsolateToggle.disabled) {
         viewerIsolateToggle.checked = !viewerIsolateToggle.checked;
         viewerIsolateToggle.dispatchEvent(new Event('change'));
+      }
+    } else if (e.key === 'm' || e.key === 'M') {
+      if (!viewerMapToggle.disabled) {
+        viewerMapToggle.checked = !viewerMapToggle.checked;
+        viewerMapToggle.dispatchEvent(new Event('change'));
       }
     } else if (e.key === 'o' || e.key === 'O') {
       if (!viewerTrajToggle.disabled) {
@@ -1239,7 +1261,9 @@ async function loadSubmapPoints(runName, submapId) {
     threeScene.add(pointsObj);
     submapCache.set(submapId, pointsObj);
 
-    if (isIsolated) {
+    if (!isMapVisible) {
+      pointsObj.visible = false;
+    } else if (isIsolated) {
       pointsObj.visible = (submapId === activeSubmapId);
     }
 
@@ -1262,12 +1286,14 @@ async function loadTrajectory(runName, opt = true) {
       threeTrajectoryLine.geometry = new THREE.BufferGeometry();
       threeTrajectoryLine.geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
       threeTrajectoryLine.visible = isTrajVisible;
+      threeTrajectoryLine.renderOrder = 10;
     } else {
       const geom = new THREE.BufferGeometry();
       geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
       const mat = new THREE.LineBasicMaterial({ color: 0x38bdf8, linewidth: 2 });
       threeTrajectoryLine = new THREE.Line(geom, mat);
       threeTrajectoryLine.visible = isTrajVisible;
+      threeTrajectoryLine.renderOrder = 10;
       threeScene.add(threeTrajectoryLine);
     }
   } catch (err) {
@@ -1367,6 +1393,7 @@ function updateLoopLines() {
     threeLoopLines.geometry = new THREE.BufferGeometry();
     threeLoopLines.geometry.setAttribute('position', new THREE.BufferAttribute(finalPositions, 3));
     threeLoopLines.visible = isLoopsVisible;
+    threeLoopLines.renderOrder = 11;
   } else {
     const geom = new THREE.BufferGeometry();
     geom.setAttribute('position', new THREE.BufferAttribute(finalPositions, 3));
@@ -1379,6 +1406,7 @@ function updateLoopLines() {
     });
     threeLoopLines = new THREE.LineSegments(geom, mat);
     threeLoopLines.visible = isLoopsVisible;
+    threeLoopLines.renderOrder = 11;
     threeScene.add(threeLoopLines);
   }
 }
@@ -1540,6 +1568,10 @@ function onActiveSubmapChanged(submapId) {
 // Update Submap Visibility for Isolation Mode & Visual Pop
 function updateSubmapVisibility() {
   submapCache.forEach((points, id) => {
+    if (!isMapVisible) {
+      points.visible = false;
+      return;
+    }
     if (isIsolated) {
       points.visible = (id === activeSubmapId);
       points.material.opacity = 1.0;
