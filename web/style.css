@@ -1,0 +1,59 @@
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #020617;
+}
+::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}
+
+/* Console log styling */
+.log-line {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.log-info {
+  color: #94a3b8;
+}
+.log-warn {
+  color: #fbbf24;
+}
+.log-err {
+  color: #f87171;
+}
+.log-progress {
+  color: #38bdf8;
+}
+
+/* Status indicator pulse animation */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(1.15); }
+}
+.status-running {
+  animation: pulse-dot 1.5s infinite ease-in-out;
+}
+
+/* Monospace console terminal sizing: ~80 chars default, ~120 chars wide */
+#console-drawer.console-standard {
+  width: 640px;
+  max-width: calc(100vw - 2rem);
+}
+
+#console-drawer.console-wide {
+  width: 960px;
+  max-width: calc(100vw - 2rem);
+}
+
+#log-console {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 11px;
+  line-height: 1.5;
+}

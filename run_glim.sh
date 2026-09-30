@@ -10,6 +10,7 @@ function show_help() {
 Usage: ./run_glim.sh [script_options] [glim_options]
 
 Script Options:
+  --web [port]          Launch headless web control service & dashboard (default port: 8080)
   --view <dir>          Launch interactive 3D viewer on a previously saved results directory
   --gui                 Enable X11 GUI forwarding for real-time 3D visualization
   --cpu                 Use CPU-only estimation and mapping (default: GPU)
@@ -37,6 +38,8 @@ EOF
   exit 0
 }
 
+WEB_MODE=0
+WEB_PORT=8080
 GUI_MODE=0
 CPU_MODE=0
 REBUILD=0
@@ -47,6 +50,15 @@ OUTPUT_DIR=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --web)
+      WEB_MODE=1
+      if [[ -n "$2" && "$2" =~ ^[0-9]+$ ]]; then
+        WEB_PORT="$2"
+        shift 2
+      else
+        shift
+      fi
+      ;;
     --view)
       VIEW_DIR="$2"
       GUI_MODE=1
@@ -82,6 +94,39 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ "$WEB_MODE" -eq 1 ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  DATA_DIR="${DATA_DIR:-/home/vishal/data}"
+  mkdir -p "${DATA_DIR}/glim_results"
+
+  if [[ "$REBUILD" -eq 1 ]]; then
+    echo "Rebuilding Docker image (glim:mcap)..."
+    docker build -t glim:mcap "$SCRIPT_DIR"
+  fi
+
+  echo "=========================================================="
+  echo " Starting GLIM Headless SLAM Web Service"
+  echo " Dashboard URL : http://localhost:${WEB_PORT:-8080}"
+  echo " Data Root     : ${DATA_DIR}"
+  echo "=========================================================="
+
+  docker rm -f glim_web_service 2>/dev/null || true
+
+  exec docker run --rm -it \
+    --name glim_web_service \
+    --gpus all \
+    --ipc=host \
+    --ulimit memlock=-1 \
+    --ulimit stack=67108864 \
+    -p "${WEB_PORT:-8080}:8080" \
+    -e MALLOC_ARENA_MAX=2 \
+    -v "${DATA_DIR}:/data" \
+    -v "${SCRIPT_DIR}/config:/opt/glim/config:ro" \
+    -v "${SCRIPT_DIR}/server:/opt/glim/server:ro" \
+    -v "${SCRIPT_DIR}/web:/opt/glim/web:ro" \
+    glim:mcap python3 -m uvicorn server.main:app --host 0.0.0.0 --port 8080
+fi
 
 if [[ -n "$VIEW_DIR" ]]; then
   if [[ ! -d "$VIEW_DIR" ]]; then
