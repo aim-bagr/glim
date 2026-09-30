@@ -1,95 +1,145 @@
 ![GLIM](docs/assets/logo2.png "GLIM Logo")
 
-## Introduction
+# GLIM (AIM Standalone Fork)
 
-**GLIM** is a versatile and extensible range-based 3D mapping framework.
+This repository is an optimized standalone fork of [koide3/glim](https://github.com/koide3/glim) developed by the **Autonomous Infrastructure Mapping (AIM)** team.
 
-- ***Accuracy:*** GLIM is based on direct multi-scan registration error minimization on factor graphs that enables to accurately retain the consistency of mapping results. GPU acceleration is supported to maximize the mapping speed and quality.
-- ***Easy-to-use:*** GLIM offers an interactive map correction interface that enables the user to manually correct mapping failures and easily refine mapping results.
-- ***Versatility:*** As we eliminated sensor-specific processes, GLIM can be applied to any kind of range sensors including:
-    - Spinning-type LiDAR (e.g., Velodyne HDL32e and Ouster OS1-32)
-    - Non-repetitive scan LiDAR (e.g., Livox Avia and MID360)
-    - Solid-state LiDAR (e.g., Intel Realsense L515)
-    - RGB-D camera (e.g., Microsoft Azure Kinect)
-- ***Extensibility:*** GLIM provides the global callback slot mechanism that allows to access the internal states of the mapping process and insert additional constraints to the factor graph. We also release [glim_ext](https://github.com/koide3/glim_ext) that offers example implementations of several extension functions (e.g., explicit loop detection, LiDAR-Visual-Inertial odometry estimation).
+> [!NOTE]
+> **Looking for the core algorithm, theory, or upstream ROS packages?**
+> Please refer to the upstream repository at **[koide3/glim](https://github.com/koide3/glim)** and the official **[GLIM Documentation](https://koide3.github.io/glim/)**.
 
-**Documentation: [https://koide3.github.io/glim/](https://koide3.github.io/glim/)**
-**Docker hub:** [koide3/glim_ros2](https://hub.docker.com/repository/docker/koide3/glim_ros2/tags)
-**Related packages:** [gtsam_points](https://github.com/koide3/gtsam_points), [glim](https://github.com/koide3/glim), ~~[glim_ros1](https://github.com/koide3/glim_ros1),~~ [glim_ros2](https://github.com/koide3/glim_ros2), [glim_ext](https://github.com/koide3/glim_ext)
+---
 
-Tested on Ubuntu 22.04 / 24.04 with CUDA 12.2 / 12.6 / 13.1, and NVIDIA Jetson Orin (Jetpack 6.1).
+## Container Releases (GHCR)
 
-If you find this package useful for your project, please consider leaving a comment [here](https://github.com/koide3/glim/issues/19). It would help the author receive recognition in his organization and keep working on this project.
+Pre-built CUDA-accelerated Docker containers are published automatically to GitHub Container Registry (**GHCR**):
 
-[![Build](https://github.com/koide3/glim/actions/workflows/build.yml/badge.svg)](https://github.com/koide3/glim/actions/workflows/build.yml)
-[![ROS2](https://github.com/koide3/glim_ros2/actions/workflows/build.yml/badge.svg)](https://github.com/koide3/glim_ros2/actions/workflows/build.yml)
-[![EXT](https://github.com/koide3/glim_ext/actions/workflows/build.yml/badge.svg)](https://github.com/koide3/glim_ext/actions/workflows/build.yml)
+```bash
+# Pull the latest stable container from main
+docker pull ghcr.io/aim-bagr/glim:latest
 
-## Updates
+# Or pull an immutable build tagged by git commit SHA (7 chars)
+docker pull ghcr.io/aim-bagr/glim:<git-sha7>
+```
 
-- 2026/07/12 : v1.2.2 released. Fix errors on GTSAM 4.3a1.
-- 2026/02/15 : v1.2.1 released. Backface culling support.
-- 2026/01/24 : v1.2.0 released. Added Support for both **GTSAM 4.2a9** and **GTSAM 4.3a0**, and **CUDA 13.1**. Added intensity visualization support.
-- 2025/06/15 : The base GTSAM version has been changed. Make sure you have rebuilt and installed **GTSAM 4.3a0** and **gtsam_points 1.2.0**.
+Every container image carries standard OCI revision metadata (`org.opencontainers.image.revision=<full-sha>`) and evaluation labels (`slam-eval.tool=glim`).
 
-## Dependencies
-### Mandatory
-- [Eigen](https://eigen.tuxfamily.org/index.php)
-- [nanoflann](https://github.com/jlblancoc/nanoflann)
-- [GTSAM](https://github.com/borglab/gtsam)
-- [gtsam_points](https://github.com/koide3/gtsam_points)
+---
 
-### Optional
-- [CUDA](https://developer.nvidia.com/cuda-toolkit)
-- [OpenCV](https://opencv.org/)
-- [OpenMP](https://www.openmp.org/)
-- [ROS/ROS2](https://www.ros.org/)
-- [Iridescence](https://github.com/koide3/iridescence)
+## Fork Features & Improvements
 
-## Gallery
+This fork transforms GLIM into a production-grade, standalone LiDAR/LiDAR-inertial SLAM engine with zero host pollution:
 
-See more at [Video Gallery](https://github.com/koide3/glim/wiki/Video-Gallery).
+### 1. Standalone MCAP Runner (`glim_mcap`)
+- **Zero ROS Dependencies**: Ingests MCAP datasets directly without requiring ROS, ROS 2, or running roscore/rosbag bridges.
+- **High-Throughput Streaming**: Integrates [`thirdparty/aimcap`](https://github.com/aim-bagr/aimcap) with chunk-by-chunk deserialization and column timestamp deskewing.
+- **Queue Backpressure Throttling**: Automatically throttles ingestion when odometry or submapping queues back up, preventing memory exhaustion on massive bags.
+- **Standardized TUM Output**: Emits trajectory poses directly in standard TUM format (`timestamp x y z qx qy qz qw`) alongside factor graph binaries.
 
-| Mapping with various range sensors | Outdoor driving test with Livox MID360 |
-|---|---|
-|[<img width="480" src="https://github.com/user-attachments/assets/95e153cd-1538-4ca6-8dd0-691e920dccd9">](https://www.youtube.com/watch?v=_fwK4awbW18)|[<img width="480" src="https://github.com/user-attachments/assets/6b337369-a32c-4b07-b0e0-b63f6747cdab">](https://www.youtube.com/watch?v=CIfRqeV0irE)|
+### 2. IMU-Less Continuous-Time SLAM
+- **Automatic Fallback (`--no-imu`)**: Automatically falls back to Continuous-Time ICP (CT-ICP) odometry estimation when IMU data is unavailable.
+- **Dedicated Configurations**: Tuned `config_no_imu.json` and `config_no_imu_cpu.json` for stable registration without inertial priors.
+- **Legacy Point Cloud Support**: Decodes legacy packed 16-byte `int32` point cloud payloads with coordinate scaling via `--scale <float>`.
+- **Intra-Scan Timestamp Synthesis**: Synthesizes intra-scan relative point timestamps when per-point offsets are missing.
+- **Front-End Odometry Mode (`--odom-only`)**: Quickly verify odometry trajectories while bypassing submapping and global graph optimization.
 
-| Manual loop closing | Merging multiple mapping sessions |
-|---|---|
-|![Image](https://github.com/user-attachments/assets/0f02950a-6b7b-437c-a100-21d6575f7c93)|![Image](https://github.com/user-attachments/assets/c77cca29-921b-4e1c-9583-2b962ccda2cb)|
+### 3. Deterministic Preprocessing
+- **Reproducible Random Grid Sampling**: Replaces thread-schedule-dependent downsampling with a deterministic voxel-keyed sampling algorithm (`splitmix64` PRNG seeded by frame seed + voxel coordinates). Repeated runs on the same dataset yield 100% bitwise-identical point clouds regardless of CPU thread count or OpenMP scheduling.
 
-| Object segmentation and removal |  |
-|---|---|
-|![Image](https://github.com/user-attachments/assets/fd1038e7-c33d-44b1-86f9-8e6474c04210)| |
+### 4. Headless Control Service & 3D Web Dashboard
+- **Web UI & REST/WebSocket Service (`server/` & `web/`)**: Complete browser-based mission control for headless remote SLAM execution.
+- **Interactive Three.js 3D Viewer**: Fullscreen point cloud visualizer with live submap streaming, trajectory lines, and loop closure edges.
+- **Visibility Layers & Hotkeys**:
+  - `M`: Toggle point cloud map visibility
+  - `O`: Toggle trajectory line
+  - `L`: Toggle loop closure factor lines
+  - `Space` / `P`: Play / pause automated submap sequencing with variable speed controls (0.5x – 4x)
+- **Deep-Linking via URL Parameters**: Auto-load runs and initialize layer visibility via URL params (e.g. `?run=my_run&map=1&traj=1&loops=1`).
 
-## Estimation modules
+### 5. Interactive Offline 3D Viewer (`glim_offline_viewer`)
+- **Submap Isolation**: Inspect single submaps or contiguous submap clusters (`DragIntRange2`) with camera auto-centering and metadata display.
+- **Context Menus**: Right-click any submap sphere or point to isolate or focus the camera.
 
-GLIM provides several estimation modules to cover use scenarios, from robust and accurate mapping with a GPU to lightweight real-time mapping with a low-specification PC like Raspberry Pi.
+---
 
-![modules](docs/assets/module.png)
+## Quickstart
 
-## Thirdparty works using GLIM
+The easiest way to run this fork is using the provided [`run_glim.sh`](run_glim.sh) launcher script. It automatically handles GPU detection (`--gpus all`), X11 display forwarding, dataset volume mounts, and container lifecycle.
 
-If you are willing to add your work here, feel free to let me know in [this thread](https://github.com/koide3/glim/issues/19) :)
+### 1. Run Standalone SLAM on an MCAP File
 
-- [kamibukuro5656/MapCleaner_Unofficial](https://github.com/kamibukuro5656/MapCleaner_Unofficial)
+```bash
+# GPU-accelerated run (default)
+./run_glim.sh -i /path/to/dataset.mcap -o ./results
 
-## License
+# IMU-less run (Continuous-Time ICP)
+./run_glim.sh -i /path/to/dataset.mcap -o ./results --no-imu
 
-This package is released under the MIT license. For commercial support, please contact ```k.koide@aist.go.jp```.
+# Odometry-only mode with custom topics and coordinate scale
+./run_glim.sh -i /path/to/dataset.mcap -o ./results \
+  --lidar /ouster/points \
+  --scale 0.01 \
+  --odom-only
 
-If you find this package useful for your project, please consider leaving a comment [here](https://github.com/koide3/glim/issues/19). It would help the author receive recognition in his organization and keep working on this project. Please also cite the following paper if you use this package in your academic work.
+# Enable real-time X11 GUI visualization
+./run_glim.sh -i /path/to/dataset.mcap -o ./results --gui
+```
 
-## Related work
+### 2. Launch the 3D Web Dashboard
 
-Koide et al., "GLIM: 3D Range-Inertial Localization and Mapping with GPU-Accelerated Scan Matching Factors", Robotics and Autonomous Systems, 2024, [[DOI]](https://doi.org/10.1016/j.robot.2024.104750) [[Arxiv]](https://arxiv.org/abs/2407.10344)
+```bash
+./run_glim.sh --web 8080
+```
+Open **`http://localhost:8080`** in your browser to inspect datasets, trigger headless SLAM runs, and visualize live or past runs in 3D.
 
-The GLIM framework involves ideas expanded from the following papers:
-- (LiDAR-IMU odometry and mapping) "Globally Consistent and Tightly Coupled 3D LiDAR Inertial Mapping", ICRA2022 [[DOI]](https://doi.org/10.1109/ICRA46639.2022.9812385)
-- (Global registration error minimization) "Globally Consistent 3D LiDAR Mapping with GPU-accelerated GICP Matching Cost Factors", IEEE RA-L, 2021, [[DOI]](https://doi.org/10.1109/LRA.2021.3113043)
-- (GPU-accelerated scan matching) "Voxelized GICP for Fast and Accurate 3D Point Cloud Registration", ICRA2021, [[DOI]](https://doi.org/10.1109/ICRA48506.2021.9560835)
+### 3. Launch the Interactive Offline 3D Viewer
 
-## Contact
-[Kenji Koide](https://staff.aist.go.jp/k.koide/), k.koide@aist.go.jp<br>
-National Institute of Advanced Industrial Science and Technology (AIST), Japan
+```bash
+./run_glim.sh --view ./results
+```
 
+---
+
+## Running Directly with Docker / GHCR
+
+You can also run the published container directly without cloning the repository:
+
+```bash
+docker run --rm -it --gpus all \
+  --user "$(id -u):$(id -g)" \
+  -v /path/to/mcap_dir:/data:ro \
+  -v /path/to/output_dir:/output \
+  ghcr.io/aim-bagr/glim:latest \
+  glim_mcap -i /data/recording.mcap -o /output
+```
+
+---
+
+## Container & Evaluation Conventions
+
+This repository adheres to the container naming and labeling standard defined in [`docs/STANDALONE_SLAM_RUNBOOK.md`](docs/STANDALONE_SLAM_RUNBOOK.md):
+
+| Mode | Container Name Format | Standard Labels |
+| :--- | :--- | :--- |
+| **Batch SLAM** | `glim-<dataset>-<yyyymmdd-hhmm>` | `slam-eval.tool=glim`, `slam-eval.dataset=<name>`, `slam-eval.run-id=<ts>` |
+| **Offline Viewer** | `glim-view-<dataset>` | `slam-eval.tool=glim`, `slam-eval.dataset=<name>`, `slam-eval.run-id=<ts>` |
+| **Web Service** | `glim-web` | `slam-eval.tool=glim`, `slam-eval.dataset=web`, `slam-eval.run-id=<ts>` |
+
+---
+
+## Upstream Attribution & Citation
+
+GLIM was developed by Kenji Koide and researchers at the National Institute of Advanced Industrial Science and Technology (AIST), Japan. If you use GLIM in academic work, please cite:
+
+```bibtex
+@article{koide2024glim,
+  title={GLIM: 3D Range-Inertial Localization and Mapping with GPU-Accelerated Scan Matching Factors},
+  author={Koide, Kenji and Yokozuka, Masashi and Oishi, Shuji and Banno, Atsuhiko},
+  journal={Robotics and Autonomous Systems},
+  year={2024},
+  publisher={Elsevier},
+  doi={10.1016/j.robot.2024.104750}
+}
+```
+
+This package is licensed under the MIT License. See [LICENSE](LICENSE) for details.
