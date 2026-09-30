@@ -20,8 +20,23 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          submodules: recursive
           fetch-depth: 0
+
+      - name: Checkout submodules via SSH deploy key
+        env:
+          SSH_KEY: ${{ secrets.AIMCAP_SSH_KEY }}
+        run: |
+          if [ -n "$SSH_KEY" ]; then
+            mkdir -p ~/.ssh
+            echo "$SSH_KEY" > ~/.ssh/id_ed25519_submodule
+            chmod 600 ~/.ssh/id_ed25519_submodule
+            export GIT_SSH_COMMAND="ssh -i ~/.ssh/id_ed25519_submodule -o StrictHostKeyChecking=no"
+            git submodule sync --recursive
+            git submodule update --init --recursive
+            rm -f ~/.ssh/id_ed25519_submodule
+          else
+            git submodule update --init --recursive || true
+          fi
 
       - name: Free disk space
         run: |
