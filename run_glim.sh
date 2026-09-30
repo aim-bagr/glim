@@ -51,6 +51,34 @@ GLIM_ARGS=()
 INPUT_FILE=""
 OUTPUT_DIR=""
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GIT_SHA="$(git -C "$SCRIPT_DIR" rev-parse --short=7 HEAD 2>/dev/null || echo "latest")"
+if [[ "$GIT_SHA" != "latest" ]]; then
+  git -C "$SCRIPT_DIR" diff --quiet HEAD 2>/dev/null || GIT_SHA="${GIT_SHA}-dirty"
+fi
+IMAGE_TAG="${IMAGE_TAG:-$GIT_SHA}"
+IMAGE_NAME="${IMAGE_NAME:-glim:${IMAGE_TAG}}"
+
+function ensure_image() {
+  if [[ "$REBUILD" -eq 1 ]] || ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
+    if [[ "$REBUILD" -ne 1 ]]; then
+      if docker image inspect "ghcr.io/aim-bagr/glim:$IMAGE_TAG" &>/dev/null; then
+        IMAGE_NAME="ghcr.io/aim-bagr/glim:$IMAGE_TAG"
+        return
+      elif docker image inspect "ghcr.io/aim-bagr/glim:latest" &>/dev/null; then
+        IMAGE_NAME="ghcr.io/aim-bagr/glim:latest"
+        return
+      elif docker image inspect "glim:mcap" &>/dev/null; then
+        IMAGE_NAME="glim:mcap"
+        return
+      fi
+    fi
+    echo "Building Docker image ($IMAGE_NAME)..."
+    FULL_SHA="$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null || echo "unknown")"
+    docker build --build-arg GIT_SHA="$FULL_SHA" -t "$IMAGE_NAME" "$SCRIPT_DIR"
+  fi
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --web)
@@ -99,25 +127,26 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$WEB_MODE" -eq 1 ]]; then
-  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   DATA_DIR="${DATA_DIR:-/home/vishal/data}"
   mkdir -p "${DATA_DIR}/glim_results"
 
-  if [[ "$REBUILD" -eq 1 ]]; then
-    echo "Rebuilding Docker image (glim:mcap)..."
-    docker build -t glim:mcap "$SCRIPT_DIR"
-  fi
+  ensure_image
 
   echo "=========================================================="
   echo " Starting GLIM Headless SLAM Web Service"
   echo " Dashboard URL : http://localhost:${WEB_PORT:-8080}"
   echo " Data Root     : ${DATA_DIR}"
+  echo " Image         : ${IMAGE_NAME}"
   echo "=========================================================="
 
-  docker rm -f glim_web_service 2>/dev/null || true
+  CONTAINER_NAME="glim-web"
+  docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
 
   exec docker run --rm -it \
-    --name glim_web_service \
+    --name "$CONTAINER_NAME" \
+    --label slam-eval.tool=glim \
+    --label slam-eval.dataset=web \
+    --label slam-eval.run-id="$(date +%Y%m%d-%H%M)" \
     --gpus all \
     --ipc=host \
     --ulimit memlock=-1 \
@@ -128,7 +157,7 @@ if [[ "$WEB_MODE" -eq 1 ]]; then
     -v "${SCRIPT_DIR}/config:/opt/glim/config:ro" \
     -v "${SCRIPT_DIR}/server:/opt/glim/server:ro" \
     -v "${SCRIPT_DIR}/web:/opt/glim/web:ro" \
-    glim:mcap python3 -m uvicorn server.main:app --host 0.0.0.0 --port 8080
+    "$IMAGE_NAME" python3 -m uvicorn server.main:app --host 0.0.0.0 --port 8080
 fi
 
 if [[ -n "$VIEW_DIR" ]]; then
@@ -137,7 +166,8 @@ if [[ -n "$VIEW_DIR" ]]; then
     exit 1
   fi
   VIEW_ABS="$(realpath "$VIEW_DIR")"
-  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+  ensure_image
 
   TARGET_DISPLAY="$DISPLAY"
   if [[ -z "$TARGET_DISPLAY" ]]; then
@@ -159,8 +189,16 @@ if [[ -n "$VIEW_DIR" ]]; then
     fi
   fi
 
+  DATASET="$(basename "$VIEW_ABS" | tr -c 'A-Za-z0-9_.\n-' '-')"
+  CONTAINER_NAME="glim-view-${DATASET}"
+  docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
+
   DOCKER_ARGS=(
     --rm
+    --name "$CONTAINER_NAME"
+    --label slam-eval.tool=glim
+    --label slam-eval.dataset="${DATASET}"
+    --label slam-eval.run-id="$(date +%Y%m%d-%H%M)"
     --gpus all
     --user "$(id -u):$(id -g)"
     --net=host
@@ -182,8 +220,10 @@ if [[ -n "$VIEW_DIR" ]]; then
   echo "Launching GLIM Offline 3D Viewer..."
   echo "  Map directory : $VIEW_ABS"
   echo "  Display       : $TARGET_DISPLAY"
+  echo "  Container     : $CONTAINER_NAME"
+  echo "  Image         : $IMAGE_NAME"
 
-  docker run "${DOCKER_ARGS[@]}" glim:mcap glim_offline_viewer /output
+  docker run "${DOCKER_ARGS[@]}" "$IMAGE_NAME" glim_offline_viewer /output
   exit 0
 fi
 
@@ -208,15 +248,18 @@ fi
 mkdir -p "$OUTPUT_DIR"
 OUTPUT_ABS="$(realpath "$OUTPUT_DIR")"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ensure_image
 
-if [[ "$REBUILD" -eq 1 ]]; then
-  echo "Building glim:mcap Docker image..."
-  docker build -t glim:mcap "$SCRIPT_DIR"
-fi
+DATASET="$(basename "${INPUT_FILE%.*}" | tr -c 'A-Za-z0-9_.\n-' '-')"
+RUN_TS="$(date +%Y%m%d-%H%M)"
+CONTAINER_NAME="glim-${DATASET}-${RUN_TS}"
 
 DOCKER_ARGS=(
   --rm
+  --name "$CONTAINER_NAME"
+  --label slam-eval.tool=glim
+  --label slam-eval.dataset="${DATASET}"
+  --label slam-eval.run-id="${RUN_TS}"
   --gpus all
   --user "$(id -u):$(id -g)"
   -e "MALLOC_ARENA_MAX=2"
@@ -269,10 +312,12 @@ else
 fi
 
 echo "Running GLIM MCAP via Docker..."
-echo "  Input : $INPUT_ABS"
-echo "  Output: $OUTPUT_ABS"
-echo "  Mode  : $( [[ $CPU_MODE -eq 1 ]] && echo 'CPU' || echo 'GPU (CUDA)' )"
-echo "  GUI   : $( [[ $GUI_MODE -eq 1 ]] && echo 'Enabled' || echo 'Headless' )"
+echo "  Input     : $INPUT_ABS"
+echo "  Output    : $OUTPUT_ABS"
+echo "  Mode      : $( [[ $CPU_MODE -eq 1 ]] && echo 'CPU' || echo 'GPU (CUDA)' )"
+echo "  GUI       : $( [[ $GUI_MODE -eq 1 ]] && echo 'Enabled' || echo 'Headless' )"
+echo "  Container : $CONTAINER_NAME"
+echo "  Image     : $IMAGE_NAME"
 
-docker run "${DOCKER_ARGS[@]}" glim:mcap \
+docker run "${DOCKER_ARGS[@]}" "$IMAGE_NAME" \
   glim_mcap -i "/data/$INPUT_BASENAME" -o /output "${GLIM_ARGS[@]}"

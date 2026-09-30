@@ -1,5 +1,8 @@
 FROM nvidia/cuda:12.2.0-devel-ubuntu22.04
 
+ARG GIT_SHA=unknown
+LABEL org.opencontainers.image.revision=$GIT_SHA
+
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LD_LIBRARY_PATH="/opt/glim/build:/usr/local/lib:${LD_LIBRARY_PATH:-}"
 
