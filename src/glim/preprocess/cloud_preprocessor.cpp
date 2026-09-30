@@ -1,12 +1,15 @@
 #include <glim/preprocess/cloud_preprocessor.hpp>
 #include <glim/preprocess/callbacks.hpp>
 
+#include <algorithm>
+#include <cstdint>
 #include <fstream>
 #include <iostream>
 #include <spdlog/spdlog.h>
 #include <gtsam_points/config.hpp>
 #include <gtsam_points/ann/kdtree.hpp>
 #include <gtsam_points/types/point_cloud_cpu.hpp>
+#include <gtsam_points/util/fast_floor.hpp>
 #include <gtsam_points/util/parallelism.hpp>
 
 #include <glim/util/config.hpp>
@@ -18,6 +21,111 @@
 #endif
 
 namespace glim {
+
+namespace {
+
+inline std::uint64_t splitmix64(std::uint64_t& state) {
+  std::uint64_t z = (state += 0x9e3779b97f4a7c15ULL);
+  z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
+  z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
+  return z ^ (z >> 31);
+}
+
+/**
+ * @brief Random grid sampling whose output does not depend on the number of threads or thread scheduling.
+ * Same semantics as gtsam_points::randomgrid_sampling (about `sampling_rate * N` points, evenly spread over occupied voxels),
+ * but points are sorted by (voxel, index) and each voxel is sampled with an RNG seeded from (per-frame seed, voxel key).
+ */
+gtsam_points::PointCloudCPU::Ptr randomgrid_sampling_deterministic(
+  const gtsam_points::PointCloud::ConstPtr& frame,
+  const double voxel_resolution,
+  const double sampling_rate,
+  std::mt19937& mt,
+  const int num_threads) {
+  if (sampling_rate >= 0.99) {
+    return gtsam_points::PointCloudCPU::clone(*frame);
+  }
+
+  constexpr std::uint64_t invalid_coord = std::numeric_limits<std::uint64_t>::max();
+  constexpr int coord_bit_size = 21;
+  constexpr std::int64_t coord_bit_mask = (1 << 21) - 1;
+  constexpr int coord_offset = 1 << (coord_bit_size - 1);
+  const double inv_resolution = 1.0 / voxel_resolution;
+
+  const std::int64_t num_points = frame->size();
+  std::vector<std::pair<std::uint64_t, std::int64_t>> coord_pt(num_points);
+
+#pragma omp parallel for num_threads(num_threads) schedule(static)
+  for (std::int64_t i = 0; i < num_points; i++) {
+    std::uint64_t key = invalid_coord;
+    if (frame->points[i].array().isFinite().all()) {
+      const Eigen::Array4i coord = gtsam_points::fast_floor(frame->points[i] * inv_resolution) + coord_offset;
+      if (!(coord < 0).any() && !(coord > coord_bit_mask).any()) {
+        key = (static_cast<std::uint64_t>(coord[0] & coord_bit_mask) << 0) |   //
+              (static_cast<std::uint64_t>(coord[1] & coord_bit_mask) << 21) |  //
+              (static_cast<std::uint64_t>(coord[2] & coord_bit_mask) << 42);
+      }
+    }
+    coord_pt[i] = {key, i};
+  }
+
+  // (key, index) is a total order, so the result is independent of the sort algorithm
+  std::sort(coord_pt.begin(), coord_pt.end());
+
+  size_t num_voxels = 0;
+  for (size_t i = 0; i < coord_pt.size() && coord_pt[i].first != invalid_coord; i++) {
+    if (i == 0 || coord_pt[i - 1].first != coord_pt[i].first) {
+      num_voxels++;
+    }
+  }
+  if (num_voxels == 0) {
+    return gtsam_points::PointCloudCPU::clone(*frame);
+  }
+
+  const size_t points_per_voxel = std::ceil((sampling_rate * num_points) / num_voxels);
+  const size_t max_num_points = num_points * sampling_rate * 1.2;
+  const std::uint64_t frame_seed = (static_cast<std::uint64_t>(mt()) << 32) | mt();
+
+  std::vector<int> indices;
+  indices.reserve(static_cast<size_t>(num_points * sampling_rate * 1.5));
+  std::vector<int> voxel_indices;
+
+  for (size_t begin = 0; begin < coord_pt.size() && coord_pt[begin].first != invalid_coord;) {
+    size_t end = begin;
+    while (end < coord_pt.size() && coord_pt[end].first == coord_pt[begin].first) {
+      end++;
+    }
+
+    voxel_indices.clear();
+    for (size_t i = begin; i < end; i++) {
+      voxel_indices.push_back(coord_pt[i].second);
+    }
+
+    if (voxel_indices.size() <= points_per_voxel) {
+      indices.insert(indices.end(), voxel_indices.begin(), voxel_indices.end());
+    } else {
+      // Partial Fisher-Yates shuffle
+      std::uint64_t state = frame_seed ^ (coord_pt[begin].first * 0x2545f4914f6cdd1dULL);
+      for (size_t k = 0; k < points_per_voxel; k++) {
+        const size_t j = k + splitmix64(state) % (voxel_indices.size() - k);
+        std::swap(voxel_indices[k], voxel_indices[j]);
+        indices.push_back(voxel_indices[k]);
+      }
+    }
+    begin = end;
+  }
+
+  if (indices.size() > max_num_points) {
+    std::vector<int> sub_indices(max_num_points);
+    std::sample(indices.begin(), indices.end(), sub_indices.begin(), max_num_points, mt);
+    indices = std::move(sub_indices);
+  }
+
+  std::sort(indices.begin(), indices.end());
+  return gtsam_points::sample(frame, indices);
+}
+
+}  // namespace
 
 CloudPreprocessorParams::CloudPreprocessorParams() {
   Config config(GlobalConfig::get_config_path("config_preprocess"));
@@ -103,7 +211,7 @@ PreprocessedFrame::Ptr CloudPreprocessor::preprocess_impl(const RawPoints::Const
   // Downsampling
   if (params.use_random_grid_downsampling) {
     const double rate = params.downsample_target > 0 ? static_cast<double>(params.downsample_target) / frame->size() : params.downsample_rate;
-    frame = gtsam_points::randomgrid_sampling(frame, params.downsample_resolution, rate, mt, params.num_threads);
+    frame = randomgrid_sampling_deterministic(frame, params.downsample_resolution, rate, mt, params.num_threads);
   } else {
     frame = gtsam_points::voxelgrid_sampling(frame, params.downsample_resolution, params.num_threads);
   }
