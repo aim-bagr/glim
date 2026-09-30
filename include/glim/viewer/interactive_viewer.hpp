@@ -93,6 +93,14 @@ protected:
   bool draw_factors;
   bool draw_spheres;
 
+  // Submap isolation / filtering
+  bool isolate_submaps;
+  int submap_filter_mode;  // 0: Single, 1: Range
+  int isolated_submap_id;
+  int submap_range[2];
+  bool auto_focus_camera;
+  bool isolate_hide_factors;
+
   float min_overlap;
   bool cont_optimize;
 

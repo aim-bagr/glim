@@ -172,8 +172,9 @@ gtsam::NonlinearFactorGraph OdometryEstimationGPU::create_factors(const int curr
   }
 
   // There must be at least one factor between consecutive frames
+  const int start_idx = static_cast<int>(frames.size() - frames.inner_size());
   for (int target = current - params->full_connection_window_size; target < current; target++) {
-    if (target < 0 || !frames.has_index(target)) {
+    if (target < start_idx || target >= static_cast<int>(frames.size()) || !frames[target]) {
       continue;
     }
 

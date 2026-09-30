@@ -59,6 +59,14 @@ InteractiveViewer::InteractiveViewer() : logger(create_module_logger("viewer")) 
   draw_factors = true;
   draw_spheres = true;
 
+  isolate_submaps = false;
+  submap_filter_mode = 0;
+  isolated_submap_id = 0;
+  submap_range[0] = 0;
+  submap_range[1] = 0;
+  auto_focus_camera = false;
+  isolate_hide_factors = true;
+
   min_overlap = 0.2f;
   cont_optimize = false;
 
@@ -151,6 +159,37 @@ void InteractiveViewer::viewer_loop() {
       return false;
     }
 
+    if (isolate_submaps) {
+      if (isolate_hide_factors && name == "factors") {
+        return false;
+      }
+
+      int id = -1;
+      try {
+        if (starts_with(name, "submap_")) {
+          id = std::stoi(name.substr(7));
+        } else if (starts_with(name, "coord_")) {
+          id = std::stoi(name.substr(6));
+        } else if (starts_with(name, "sphere_")) {
+          id = std::stoi(name.substr(7));
+        }
+      } catch (...) {
+        id = -1;
+      }
+
+      if (id >= 0) {
+        if (submap_filter_mode == 0) {
+          if (id != isolated_submap_id) {
+            return false;
+          }
+        } else {
+          if (id < submap_range[0] || id > submap_range[1]) {
+            return false;
+          }
+        }
+      }
+    }
+
     return true;
   });
 
@@ -221,6 +260,80 @@ void InteractiveViewer::drawable_selection() {
   ImGui::Checkbox("Spheres", &draw_spheres);
 
   ImGui::Checkbox("Current scan", &draw_current);
+
+  ImGui::Separator();
+  ImGui::Checkbox("Isolate submaps", &isolate_submaps);
+
+  const int max_submap_idx = submaps.empty() ? 0 : static_cast<int>(submaps.size()) - 1;
+  if (submap_range[1] == 0 && max_submap_idx > 0) {
+    submap_range[1] = max_submap_idx;
+  }
+  isolated_submap_id = std::max(0, std::min(isolated_submap_id, max_submap_idx));
+
+  if (isolate_submaps) {
+    std::vector<const char*> filter_modes = {"Single", "Range"};
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(80);
+    ImGui::Combo("##SubmapFilterMode", &submap_filter_mode, filter_modes.data(), filter_modes.size());
+
+    if (submap_filter_mode == 0) {
+      if (ImGui::Button("< Prev") && isolated_submap_id > 0) {
+        isolated_submap_id--;
+        if (auto_focus_camera && isolated_submap_id < submap_poses.size()) {
+          guik::LightViewer::instance()->lookat(submap_poses[isolated_submap_id].translation().cast<float>());
+          guik::LightViewer::instance()->reset_center();
+        }
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Next >") && isolated_submap_id < max_submap_idx) {
+        isolated_submap_id++;
+        if (auto_focus_camera && isolated_submap_id < submap_poses.size()) {
+          guik::LightViewer::instance()->lookat(submap_poses[isolated_submap_id].translation().cast<float>());
+          guik::LightViewer::instance()->reset_center();
+        }
+      }
+      ImGui::SameLine();
+      ImGui::SetNextItemWidth(140);
+      if (ImGui::SliderInt("##SubmapSlider", &isolated_submap_id, 0, max_submap_idx, "ID: %d")) {
+        if (auto_focus_camera && isolated_submap_id >= 0 && isolated_submap_id < submap_poses.size()) {
+          guik::LightViewer::instance()->lookat(submap_poses[isolated_submap_id].translation().cast<float>());
+          guik::LightViewer::instance()->reset_center();
+        }
+      }
+
+      ImGui::Checkbox("Auto-center camera", &auto_focus_camera);
+      ImGui::SameLine();
+      if (ImGui::Button("Center camera") && isolated_submap_id >= 0 && isolated_submap_id < submap_poses.size()) {
+        guik::LightViewer::instance()->lookat(submap_poses[isolated_submap_id].translation().cast<float>());
+        guik::LightViewer::instance()->reset_center();
+      }
+
+      if (isolated_submap_id >= 0 && isolated_submap_id < submaps.size() && submaps[isolated_submap_id]) {
+        const auto& sm = submaps[isolated_submap_id];
+        const Eigen::Vector3d pos = submap_poses[isolated_submap_id].translation();
+        ImGui::Text("Submap %d / %d | Pts: %ld | Frames: %ld", sm->id, max_submap_idx, sm->frame ? sm->frame->size() : 0, sm->frames.size());
+        ImGui::Text("Pos: (%.1f, %.1f, %.1f) | Session: %d", pos.x(), pos.y(), pos.z(), sm->session_id);
+      }
+    } else {
+      ImGui::SetNextItemWidth(180);
+      ImGui::DragIntRange2("Range", &submap_range[0], &submap_range[1], 1.0f, 0, max_submap_idx);
+      submap_range[0] = std::max(0, std::min(submap_range[0], max_submap_idx));
+      submap_range[1] = std::max(submap_range[0], std::min(submap_range[1], max_submap_idx));
+      ImGui::Text("Showing submaps %d to %d (%d submaps)", submap_range[0], submap_range[1], submap_range[1] - submap_range[0] + 1);
+
+      if (ImGui::Button("Center on start") && submap_range[0] < submap_poses.size()) {
+        guik::LightViewer::instance()->lookat(submap_poses[submap_range[0]].translation().cast<float>());
+        guik::LightViewer::instance()->reset_center();
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Center on end") && submap_range[1] < submap_poses.size()) {
+        guik::LightViewer::instance()->lookat(submap_poses[submap_range[1]].translation().cast<float>());
+        guik::LightViewer::instance()->reset_center();
+      }
+    }
+
+    ImGui::Checkbox("Hide factors when isolating", &isolate_hide_factors);
+  }
 
   if (ImGui::BeginMenu("Display settings")) {
     bool do_update_viewer = false;
@@ -377,20 +490,54 @@ void InteractiveViewer::context_menu() {
   if (ImGui::BeginPopupContextVoid("context menu")) {
     const PickType type = static_cast<PickType>(right_clicked_info[0]);
 
-    if (type == PickType::FRAME) {
+    if (type == PickType::FRAME || type == PickType::POINTS) {
       const int frame_id = right_clicked_info[3];
-      ImGui::TextUnformatted(("Submap ID : " + std::to_string(frame_id)).c_str());
-      if (ImGui::MenuItem("Loop begin", nullptr, manual_loop_close_modal->is_target_set())) {
-        manual_loop_close_modal->set_target(X(frame_id), submaps[frame_id]->frame, submap_poses[frame_id]);
-      }
-      if (ImGui::MenuItem("Loop end", nullptr, manual_loop_close_modal->is_source_set())) {
-        manual_loop_close_modal->set_source(X(frame_id), submaps[frame_id]->frame, submap_poses[frame_id]);
+      if (frame_id >= 0 && frame_id < submaps.size() && submaps[frame_id]) {
+        ImGui::TextUnformatted(("Submap ID : " + std::to_string(frame_id)).c_str());
+
+        if (ImGui::MenuItem("Isolate this submap")) {
+          isolate_submaps = true;
+          submap_filter_mode = 0;
+          isolated_submap_id = frame_id;
+          if (frame_id < submap_poses.size()) {
+            guik::LightViewer::instance()->lookat(submap_poses[frame_id].translation().cast<float>());
+            guik::LightViewer::instance()->reset_center();
+          }
+        }
+
+        if (isolate_submaps && ImGui::MenuItem("Show all submaps")) {
+          isolate_submaps = false;
+        }
+
+        if (ImGui::MenuItem("Move camera here")) {
+          if (frame_id < submap_poses.size()) {
+            guik::LightViewer::instance()->lookat(submap_poses[frame_id].translation().cast<float>());
+            guik::LightViewer::instance()->reset_center();
+          }
+        }
+
+        ImGui::Separator();
+
+        if (type == PickType::FRAME) {
+          if (ImGui::MenuItem("Loop begin", nullptr, manual_loop_close_modal->is_target_set())) {
+            manual_loop_close_modal->set_target(X(frame_id), submaps[frame_id]->frame, submap_poses[frame_id]);
+          }
+          if (ImGui::MenuItem("Loop end", nullptr, manual_loop_close_modal->is_source_set())) {
+            manual_loop_close_modal->set_source(X(frame_id), submaps[frame_id]->frame, submap_poses[frame_id]);
+          }
+        }
       }
     }
 
     if (type == PickType::POINTS) {
       if (ImGui::MenuItem("Bundle adjustment (Plane)")) {
         bundle_adjustment_modal->set_frames(submaps, submap_poses, right_clicked_pos.cast<double>());
+      }
+    }
+
+    if (isolate_submaps && type != PickType::FRAME && type != PickType::POINTS) {
+      if (ImGui::MenuItem("Show all submaps")) {
+        isolate_submaps = false;
       }
     }
 

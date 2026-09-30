@@ -1,7 +1,8 @@
 cmake_minimum_required(VERSION 3.22)
 project(glim VERSION 1.2.2 LANGUAGES CXX)
 
-add_compile_options(-std=c++17)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_CURRENT_LIST_DIR}/cmake")
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
@@ -200,6 +201,42 @@ if(BUILD_WITH_VIEWER)
   )
 
   list(APPEND glim_LIBRARIES standard_viewer interactive_viewer memory_monitor map_editor)
+endif()
+
+option(BUILD_STANDALONE_MCAP "Build standalone MCAP reader executable" ON)
+if(BUILD_STANDALONE_MCAP)
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/aimcap/CMakeLists.txt")
+    set(AIMCAP_BUILD_TESTS OFF CACHE BOOL "Build unit tests" FORCE)
+    add_subdirectory(thirdparty/aimcap EXCLUDE_FROM_ALL)
+
+    add_executable(glim_mcap
+      src/glim_mcap.cpp
+    )
+    target_link_libraries(glim_mcap
+      glim
+      aimcap::reader
+    )
+    set_target_properties(glim_mcap PROPERTIES
+      INSTALL_RPATH "$ORIGIN;$ORIGIN/../lib;/usr/local/lib"
+      BUILD_WITH_INSTALL_RPATH TRUE
+    )
+    list(APPEND glim_LIBRARIES glim_mcap)
+
+    if(TARGET interactive_viewer)
+      add_executable(glim_offline_viewer
+        src/glim_offline_viewer.cpp
+      )
+      target_link_libraries(glim_offline_viewer
+        glim
+        interactive_viewer
+      )
+      set_target_properties(glim_offline_viewer PROPERTIES
+        INSTALL_RPATH "$ORIGIN;$ORIGIN/../lib;/usr/local/lib"
+        BUILD_WITH_INSTALL_RPATH TRUE
+      )
+      list(APPEND glim_LIBRARIES glim_offline_viewer)
+    endif()
+  endif()
 endif()
 
 #############
