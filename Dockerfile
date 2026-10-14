@@ -37,7 +37,6 @@ RUN apt-get install -y --no-install-recommends \
     libeigen3-dev \
     libnanoflann-dev \
     libgtsam-notbb-dev \
-    libgtsam-points-cuda12.2-dev \
     libiridescence-dev \
     zenity \
     python3-pip \
@@ -59,8 +58,10 @@ RUN cmake .. \
     -DBUILD_WITH_MARCH_NATIVE=OFF \
     -DBUILD_STANDALONE_MCAP=ON \
     && cmake --build . -j$(nproc) \
-    && ln -s /opt/glim/build/glim_mcap /usr/local/bin/glim_mcap \
-    && ln -s /opt/glim/build/glim_offline_viewer /usr/local/bin/glim_offline_viewer \
+    && cmake --install . \
+    && ldconfig \
+    && ln -sf /opt/glim/build/glim_mcap /usr/local/bin/glim_mcap \
+    && ln -sf /opt/glim/build/glim_offline_viewer /usr/local/bin/glim_offline_viewer \
     && chmod -R a+rX /opt/glim
 
 EXPOSE 8080
