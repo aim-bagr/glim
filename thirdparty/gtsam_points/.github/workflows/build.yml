@@ -1,0 +1,70 @@
+name: Build
+
+on:
+  push:
+    branches: [ master ]
+    paths-ignore: '**.md'
+  pull_request:
+    branches: [ master ]
+    paths-ignore: '**.md'
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        DISTRO: [
+          { "tag": "jammy_gtsam4.3a1", "base_image": "ubuntu:jammy", "suffix": "gcc" },
+          { "tag": "jammy_gtsam4.3a1", "base_image": "ubuntu:jammy", "suffix": "llvm" },
+          { "tag": "jammy_cuda12.2_gtsam4.3a1", "base_image": "nvidia/cuda:12.2.2-devel-ubuntu22.04", "suffix": "gcc.cuda" },
+          { "tag": "jammy_cuda12.5_gtsam4.3a1", "base_image": "nvidia/cuda:12.5.1-devel-ubuntu22.04", "suffix": "gcc.cuda" },
+          { "tag": "jammy_cuda13.1_gtsam4.3a1", "base_image": "nvidia/cuda:13.1.0-devel-ubuntu22.04", "suffix": "gcc.cuda" },
+          { "tag": "noble_gtsam4.3a1", "base_image": "ubuntu:noble", "suffix": "gcc" },
+          { "tag": "noble_gtsam4.3a1", "base_image": "ubuntu:noble", "suffix": "llvm" },
+          { "tag": "noble_cuda12.5_gtsam4.3a1", "base_image": "nvidia/cuda:12.5.1-devel-ubuntu24.04", "suffix": "gcc.cuda" },
+          { "tag": "noble_cuda13.1_gtsam4.3a1", "base_image": "nvidia/cuda:13.1.0-devel-ubuntu24.04", "suffix": "gcc.cuda" },
+          { "tag": "noble_cuda13.3_gtsam4.3a1", "base_image": "nvidia/cuda:13.3.0-devel-ubuntu24.04", "suffix": "gcc.cuda" },
+          { "tag": "resolute_gtsam4.3a1", "base_image": "ubuntu:resolute", "suffix": "gcc" },
+          { "tag": "resolute_cuda13.3_gtsam4.3a1", "base_image": "nvidia/cuda:13.3.0-devel-ubuntu26.04", "suffix": "gcc.cuda" },
+        ]
+        BUILD_WITH_TBB: [ "ON", "OFF" ]
+
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
+
+      - name: Docker login
+        continue-on-error: true
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_TOKEN }}
+
+      - name: Docker build
+        uses: docker/build-push-action@v6
+        with:
+          tags: koide3/gtsam_points:${{ matrix.DISTRO.tag }}
+          file: ${{github.workspace}}/docker/ubuntu/Dockerfile.${{ matrix.DISTRO.suffix }}
+          build-args: |
+            BASE_IMAGE=${{ matrix.DISTRO.base_image }}
+            BUILD_WITH_TBB=${{ matrix.BUILD_WITH_TBB }}
+          context: .
+          push: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (matrix.BUILD_WITH_TBB == 'OFF') && (contains(matrix.DISTRO.suffix, 'gcc') || contains(matrix.DISTRO.suffix, 'focal')) }}
+
+  dispatch:
+    needs: build
+    strategy:
+      matrix:
+        repo: ['koide3/glim']
+    runs-on: ubuntu-latest
+    steps:
+      - name: Repository Dispatch
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.PAT }}
+          repository: ${{ matrix.repo }}
+          event-type: trigger-event
